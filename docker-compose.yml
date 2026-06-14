@@ -1,0 +1,36 @@
+# docker compose down -v
+# docker compose build --no-cache
+# docker compose up
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: avid_backend_api
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      MONGO_URI: mongodb://mongodb:27017
+      MONGO_DB_NAME: avid_panel
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:7
+    container_name: avid_mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - avid_mongodb_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  avid_mongodb_data:

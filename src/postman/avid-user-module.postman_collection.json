@@ -1,0 +1,433 @@
+{
+    "info": {
+        "_postman_id": "b2d8cc64-b97c-4d5e-a2f2-avid-users",
+        "name": "Avid Panel - User Module API",
+        "description": "Postman collection for testing Avid User Module APIs.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:4000/api/v1",
+            "type": "string"
+        },
+        {
+            "key": "userId",
+            "value": "",
+            "type": "string"
+        }
+    ],
+    "item": [
+        {
+            "name": "Service - Base API Status",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('Response is JSON', function () {",
+                            "  pm.response.to.be.json;",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Get Metadata",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/users/meta/options"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('Metadata exists', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.success).to.eql(true);",
+                            "  pm.expect(json.data.roles).to.be.an('array');",
+                            "  pm.expect(json.data.statuses).to.be.an('array');",
+                            "  pm.expect(json.data.accessLevels).to.be.an('array');",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Create Employee",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "url": "{{baseUrl}}/users",
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"firstName\": \"علی\",\n  \"lastName\": \"احمدی\",\n  \"email\": \"ali.ahmadi.{{$timestamp}}@avid.local\",\n  \"phone\": \"09120000000\",\n  \"password\": \"StrongPass123!\",\n  \"role\": \"EMPLOYEE\",\n  \"profile\": {\n    \"jobTitle\": \"توسعه‌دهنده فرانت‌اند\",\n    \"domain\": \"توسعه نرم‌افزار\",\n    \"specialtyChapter\": \"Frontend\",\n    \"responsibilityScope\": \"پیاده‌سازی رابط کاربری پنل مدیریتی\"\n  },\n  \"workUnit\": {\n    \"isIndependentWorkUnit\": true,\n    \"unitCode\": \"DEV-FE-{{$timestamp}}\",\n    \"responsibilities\": [\n      \"ثبت گزارش روزانه\",\n      \"ارائه شواهد برای خروجی‌های انجام‌شده\",\n      \"هماهنگی با مالک پروژه در موارد وابستگی\"\n    ],\n    \"limits\": [\n      \"عدم تغییر محدوده پروژه بدون تایید مدیریت\"\n    ],\n    \"defaultReportRequired\": true\n  }\n}"
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 201', function () {",
+                            "  pm.response.to.have.status(201);",
+                            "});",
+                            "",
+                            "pm.test('Created user id is saved', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.success).to.eql(true);",
+                            "  pm.expect(json.data.id).to.be.a('string');",
+                            "  pm.collectionVariables.set('userId', json.data.id);",
+                            "});",
+                            "",
+                            "pm.test('Password hash is not returned', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.data.passwordHash).to.be.undefined;",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Create Manager",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "url": "{{baseUrl}}/users",
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"firstName\": \"مریم\",\n  \"lastName\": \"رضایی\",\n  \"email\": \"maryam.rezaei.{{$timestamp}}@avid.local\",\n  \"phone\": \"09121111111\",\n  \"password\": \"StrongPass123!\",\n  \"role\": \"MANAGER\",\n  \"profile\": {\n    \"jobTitle\": \"مدیر اجرایی\",\n    \"domain\": \"مدیریت\",\n    \"specialtyChapter\": \"Management\",\n    \"responsibilityScope\": \"بررسی گزارش‌ها، ریسک‌ها و وضعیت پروژه‌ها\"\n  },\n  \"workUnit\": {\n    \"isIndependentWorkUnit\": true,\n    \"unitCode\": \"MNG-{{$timestamp}}\",\n    \"responsibilities\": [\n      \"بررسی گزارش‌های روزانه\",\n      \"تصمیم‌گیری درباره ریسک‌های مهم\",\n      \"هماهنگی بین واحدهای کاری مستقل\"\n    ],\n    \"limits\": [\n      \"تصمیمات حساس باید ثبت و قابل پیگیری باشند\"\n    ],\n    \"defaultReportRequired\": false\n  }\n}"
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 201', function () {",
+                            "  pm.response.to.have.status(201);",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - List",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/users?page=1&limit=20"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('List has data and pagination', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.data).to.be.an('array');",
+                            "  pm.expect(json.pagination).to.be.an('object');",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - List Employees Search",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/users?page=1&limit=10&role=EMPLOYEE&search=علی"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Get By ID",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/users/{{userId}}"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('User id matches variable', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.data.id).to.eql(pm.collectionVariables.get('userId'));",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Update",
+            "request": {
+                "method": "PATCH",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "url": "{{baseUrl}}/users/{{userId}}",
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"firstName\": \"علی\",\n  \"lastName\": \"احمدی ویرایش‌شده\",\n  \"phone\": \"09129999999\",\n  \"profile\": {\n    \"jobTitle\": \"توسعه‌دهنده ارشد فرانت‌اند\",\n    \"domain\": \"توسعه نرم‌افزار\",\n    \"specialtyChapter\": \"Frontend\",\n    \"responsibilityScope\": \"توسعه و بهبود رابط کاربری پنل مدیریتی\"\n  },\n  \"workUnit\": {\n    \"responsibilities\": [\n      \"ثبت گزارش روزانه\",\n      \"ارائه شواهد برای خروجی‌های انجام‌شده\",\n      \"بهبود کیفیت رابط کاربری\"\n    ],\n    \"limits\": [\n      \"عدم تغییر محدوده پروژه بدون تایید مدیریت\"\n    ]\n  }\n}"
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('User was updated', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.data.lastName).to.eql('احمدی ویرایش‌شده');",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Change Status Suspended",
+            "request": {
+                "method": "PATCH",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "url": "{{baseUrl}}/users/{{userId}}/status",
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"status\": \"SUSPENDED\"\n}"
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('User is suspended', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.data.status).to.eql('SUSPENDED');",
+                            "  pm.expect(json.data.isActive).to.eql(false);",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Change Status Active",
+            "request": {
+                "method": "PATCH",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "url": "{{baseUrl}}/users/{{userId}}/status",
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"status\": \"ACTIVE\"\n}"
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('User is active', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.data.status).to.eql('ACTIVE');",
+                            "  pm.expect(json.data.isActive).to.eql(true);",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Archive",
+            "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": "{{baseUrl}}/users/{{userId}}"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 200', function () {",
+                            "  pm.response.to.have.status(200);",
+                            "});",
+                            "",
+                            "pm.test('User is archived', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.data.status).to.eql('ARCHIVED');",
+                            "  pm.expect(json.data.isActive).to.eql(false);",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Users - Get Archived User Should Return 404",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/users/{{userId}}"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 404 after archive', function () {",
+                            "  pm.response.to.have.status(404);",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Validation - Create User Invalid Email",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "url": "{{baseUrl}}/users",
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n  \"firstName\": \"تست\",\n  \"lastName\": \"اعتبارسنجی\",\n  \"email\": \"invalid-email\",\n  \"password\": \"StrongPass123!\",\n  \"role\": \"EMPLOYEE\"\n}"
+                }
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 400', function () {",
+                            "  pm.response.to.have.status(400);",
+                            "});",
+                            "",
+                            "pm.test('Validation error code exists', function () {",
+                            "  const json = pm.response.json();",
+                            "  pm.expect(json.code).to.eql('VALIDATION_ERROR');",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Validation - Get User Invalid ID",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{baseUrl}}/users/not-valid-id"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "pm.test('Status code is 400', function () {",
+                            "  pm.response.to.have.status(400);",
+                            "});"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}
