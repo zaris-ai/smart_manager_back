@@ -85,6 +85,9 @@ const TELEGRAM_API_BASE = `https://api.telegram.org/bot${process.env.TELEGRAM_BO
 
 const uploadRoot = path.resolve(process.cwd(), 'uploads', 'projects');
 
+const TASK_FILE_CATEGORY = 'reports';
+const TASK_FILE_CATEGORY_LABEL = 'گزارش‌ها';
+
 if (!fs.existsSync(uploadRoot)) {
     fs.mkdirSync(uploadRoot, { recursive: true });
 }
@@ -94,7 +97,7 @@ const isValidObjectId = (value?: string) => {
 };
 
 const escapeHtml = (value: string) => {
-    return value
+    return String(value || '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
@@ -461,8 +464,10 @@ const saveTelegramAttachmentToTask = async (
         fileUrl: `/uploads/projects/${fileName}`,
         fileType: telegramFile.mimeType,
         fileSize: telegramFile.fileSize || downloadedFile.fileSize,
-        category: 'task_attachment',
-    });
+        category: TASK_FILE_CATEGORY,
+        categoryLabel: TASK_FILE_CATEGORY_LABEL,
+        source: 'telegram_bot',
+    } as any);
 
     return true;
 };
@@ -485,7 +490,11 @@ const handleTextMessage = async (message: TelegramMessage) => {
     const chatId = message.chat.id;
     const text = message.text?.trim() || '';
 
-    if (['/task', '/tasks', '/newtask', 'تعریف وظیفه', 'ثبت وظیفه'].includes(text)) {
+    if (
+        ['/task', '/tasks', '/newtask', 'تعریف وظیفه', 'ثبت وظیفه'].includes(
+            text,
+        )
+    ) {
         await startTaskRegistration(chatId);
         return;
     }
@@ -656,6 +665,11 @@ const handleCallbackQuery = async (callbackQuery: TelegramCallbackQuery) => {
     const data = callbackQuery.data;
     const state = states.get(chatId);
 
+    if (data === 'tt:start') {
+        await startTaskRegistration(chatId);
+        return;
+    }
+
     if (data === 'tt:finish') {
         states.delete(chatId);
         await sendMessage(chatId, 'ثبت وظیفه کامل شد.');
@@ -703,7 +717,10 @@ const handleCallbackQuery = async (callbackQuery: TelegramCallbackQuery) => {
 
     if (data.startsWith('tt:pr:')) {
         if (!state) {
-            await sendMessage(chatId, 'فرآیند تعریف وظیفه پیدا نشد. دوباره /task را ارسال کنید.');
+            await sendMessage(
+                chatId,
+                'فرآیند تعریف وظیفه پیدا نشد. دوباره /task را ارسال کنید.',
+            );
             return;
         }
 
