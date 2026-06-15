@@ -1,3 +1,5 @@
+// src/modules/projects/project.model.ts
+
 import mongoose, { Document, Model, Schema, Types } from 'mongoose';
 
 export enum ProjectStatus {
@@ -32,6 +34,13 @@ export enum ProjectFileCategory {
   DELIVERY = 'delivery',
   TASK_ATTACHMENT = 'task_attachment',
   OTHER = 'other',
+}
+
+export enum ProjectCalendarEventType {
+  PROJECT_START = 'project_start',
+  PROJECT_DUE = 'project_due',
+  TASK_START = 'task_start',
+  TASK_DUE = 'task_due',
 }
 
 export enum ProjectSource {
