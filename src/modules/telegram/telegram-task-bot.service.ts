@@ -1,12 +1,19 @@
-import fs from 'fs';
+import crypto from 'crypto';
+import fs from 'fs/promises';
 import path from 'path';
 import { Types } from 'mongoose';
 import TelegramTaskSession from './telegram-task-session.model';
 import User from '@/modules/users/user.model';
 import Project, {
     ProjectFile,
+    ProjectFileCategory,
+    PROJECT_FILE_CATEGORY_LABELS,
     ProjectTask,
 } from '@/modules/projects/project.model';
+import {
+    downloadTelegramFile,
+    getTelegramFile,
+} from '@/modules/telegram/telegram.service';
 
 type TelegramFileLike = {
     file_id: string;
@@ -82,10 +89,7 @@ type DownloadedTelegramFile = {
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_API_BASE_URL = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
-const TELEGRAM_FILE_BASE_URL = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}`;
-
-const UPLOAD_ROOT =
-    process.env.UPLOAD_ROOT || path.join(process.cwd(), 'uploads');
+const UPLOAD_ROOT = process.env.UPLOAD_ROOT || path.join(process.cwd(), 'uploads');
 const PUBLIC_UPLOAD_PREFIX = process.env.PUBLIC_UPLOAD_PREFIX || '/uploads';
 
 const ROLE_MANAGER = 'manager';
@@ -93,8 +97,11 @@ const STATUS_CANCELLED = 'cancelled';
 const TASK_STATUS_DONE = 'done';
 const TASK_STATUS_CANCELLED = 'cancelled';
 
-const TASK_ATTACHMENT_CATEGORY = 'task_attachment';
-const TASK_ATTACHMENT_CATEGORY_LABEL = 'پیوست وظیفه';
+const TASK_ATTACHMENT_CATEGORY =
+    (ProjectFileCategory as any).REPORTS || 'reports';
+
+const TASK_ATTACHMENT_CATEGORY_LABEL =
+    (PROJECT_FILE_CATEGORY_LABELS as any)[TASK_ATTACHMENT_CATEGORY] || 'پیوست وظیفه';
 
 const ensureBotToken = (): void => {
     if (!TELEGRAM_BOT_TOKEN) {
@@ -113,11 +120,12 @@ const getTelegramUserId = (
     return String(message?.from?.id || callbackQuery?.from?.id || '');
 };
 
-const escapeHtml = (value: string): string => {
-    return String(value || '')
+const escapeHtml = (value: unknown): string => {
+    return String(value ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 };
 
 const sendTelegramRequest = async <T = any>(
@@ -154,6 +162,7 @@ const sendMessage = async (
         chat_id: chatId,
         text,
         parse_mode: 'HTML',
+        disable_web_page_preview: true,
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
 };
@@ -166,7 +175,7 @@ const answerCallbackQuery = async (
         callback_query_id: callbackQueryId,
         ...(text ? { text } : {}),
         show_alert: false,
-    });
+    }).catch(() => undefined);
 };
 
 const buildInlineKeyboard = (
@@ -309,26 +318,6 @@ const clearSession = async (chatId: string): Promise<void> => {
     } as any);
 };
 
-const showTaskHome = async (
-    chatId: string,
-    telegramUserId: string,
-): Promise<void> => {
-    const actor = await ensureLinkedActor(chatId, telegramUserId);
-    if (!actor) return;
-
-    await sendMessage(
-        chatId,
-        [
-            `سلام ${escapeHtml(getUserDisplayName(actor))}.`,
-            '',
-            'از این بخش می‌توانید وظیفه مدیریتی ثبت کنید یا وظایف باز خود را ببینید.',
-            '',
-            'برای ثبت وظیفه: پروژه را انتخاب کنید، مدیر را انتخاب کنید، متن وظیفه را بنویسید، سپس ویس ضبط‌شده، فایل، عکس، ویدئو یا «بدون پیوست» را ارسال کنید.',
-        ].join('\n'),
-        buildTaskHomeKeyboard(),
-    );
-};
-
 const startTaskFlow = async (
     chatId: string,
     telegramUserId: string,
@@ -431,10 +420,7 @@ const listOpenTasks = async (
 
     const tasks = await ProjectTask.find(filter as any)
         .populate('projectId', 'title name status')
-        .populate(
-            'assignedUserIds',
-            'firstName lastName fullName username email role',
-        )
+        .populate('assignedUserIds', 'firstName lastName fullName username email role')
         .sort({
             dueDate: 1,
             updatedAt: -1,
@@ -718,7 +704,7 @@ const handleTaskText = async (
         chatId,
         `وظیفه ثبت موقت شد:\n<b>${escapeHtml(
             parsed.title,
-        )}</b>\n\nاکنون می‌توانید ویس ضبط کنید و ارسال کنید. همچنین می‌توانید فایل، عکس یا ویدئو بفرستید. اگر پیوست ندارید، روی «بدون پیوست» بزنید.`,
+        )}</b>\n\nاکنون می‌توانید ویس ضبط‌شده، فایل، فایل صوتی، عکس یا ویدئو ارسال کنید. اگر پیوست ندارید، روی «بدون پیوست» بزنید.`,
         buildInlineKeyboard([
             [
                 {
@@ -754,8 +740,23 @@ const extensionFromMime = (mimeType: string): string => {
     return map[mimeType] || '';
 };
 
-const fileExtensionFromTelegramPath = (telegramFilePath: string): string => {
-    return path.extname(telegramFilePath || '');
+const safeOriginalName = (value: string): string => {
+    const safe = String(value || '').replace(/[^a-zA-Z0-9.\-_]/g, '_');
+
+    return safe || 'telegram-file';
+};
+
+const originalNameFromFilePath = (
+    filePath: string,
+    fallback: string,
+    fallbackExtension = '',
+): string => {
+    const name = path.basename(filePath || '').trim();
+    const base = safeOriginalName(name || fallback || 'telegram-file');
+
+    if (path.extname(base)) return base;
+
+    return `${base}${fallbackExtension}`;
 };
 
 const fileLikeToAttachment = (
@@ -772,7 +773,7 @@ const fileLikeToAttachment = (
         fileId: file.file_id,
         fileUniqueId: file.file_unique_id || '',
         originalName: file.file_name || fallbackWithExtension,
-        fileType: file.mime_type || '',
+        fileType: file.mime_type || (kind === 'voice' ? 'audio/ogg' : ''),
         fileSize: file.file_size || 0,
         kind,
     };
@@ -789,20 +790,10 @@ const getLargestPhoto = (
 const getTelegramAttachment = (
     message: TelegramMessage,
 ): TelegramAttachmentInput | null => {
-    /*
-      Recorded Telegram audio from the microphone arrives here:
-      message.voice
-
-      This is the main fix.
-    */
     if (message.voice?.file_id) {
         return fileLikeToAttachment(message.voice, 'voice', 'voice.ogg');
     }
 
-    /*
-      Uploaded audio files arrive here:
-      message.audio
-    */
     if (message.audio?.file_id) {
         return fileLikeToAttachment(message.audio, 'audio', 'audio');
     }
@@ -831,90 +822,88 @@ const getTelegramAttachment = (
     return null;
 };
 
-const getTelegramFileInfo = async (
-    fileId: string,
-): Promise<{
-    file_id: string;
-    file_unique_id?: string;
-    file_size?: number;
-    file_path?: string;
-}> => {
-    const result = await sendTelegramRequest<{
-        file_id: string;
-        file_unique_id?: string;
-        file_size?: number;
-        file_path?: string;
-    }>('getFile', {
-        file_id: fileId,
-    });
-
-    return result;
-};
-
 const downloadTelegramAttachment = async (
     attachment: TelegramAttachmentInput,
 ): Promise<DownloadedTelegramFile> => {
-    ensureBotToken();
-
-    const telegramFile = await getTelegramFileInfo(attachment.fileId);
+    const telegramFile = await getTelegramFile(attachment.fileId);
 
     if (!telegramFile.file_path) {
         throw new Error('Telegram file path could not be fetched.');
     }
 
-    const fileResponse = await fetch(
-        `${TELEGRAM_FILE_BASE_URL}/${telegramFile.file_path}`,
-    );
+    const buffer = await downloadTelegramFile(telegramFile.file_path);
 
-    if (!fileResponse.ok) {
-        throw new Error('Telegram file could not be downloaded.');
-    }
-
-    const arrayBuffer = await fileResponse.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    const extensionFromTelegram = fileExtensionFromTelegramPath(
-        telegramFile.file_path,
-    );
-
-    const extension =
-        path.extname(attachment.originalName) ||
-        extensionFromTelegram ||
+    const telegramExtension = path.extname(telegramFile.file_path);
+    const fallbackExtension =
+        telegramExtension ||
         extensionFromMime(attachment.fileType || '') ||
         (attachment.kind === 'voice' ? '.ogg' : '');
 
-    const baseOriginalName = path.basename(
-        attachment.originalName || `${attachment.kind}${extension}`,
+    const originalName = originalNameFromFilePath(
+        telegramFile.file_path,
+        attachment.originalName,
+        fallbackExtension,
     );
 
-    const safeOriginalName = baseOriginalName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-
-    const finalOriginalName = path.extname(safeOriginalName)
-        ? safeOriginalName
-        : `${safeOriginalName}${extension}`;
-
-    const fileName = `${Date.now()}-${Math.round(
-        Math.random() * 1e9,
-    )}-${finalOriginalName}`;
-
+    const fileName = `${Date.now()}-${crypto.randomUUID()}-${originalName}`;
     const relativeDir = path.join('projects', 'tasks');
     const absoluteDir = path.join(UPLOAD_ROOT, relativeDir);
 
-    fs.mkdirSync(absoluteDir, {
+    await fs.mkdir(absoluteDir, {
         recursive: true,
     });
 
     const absolutePath = path.join(absoluteDir, fileName);
 
-    fs.writeFileSync(absolutePath, buffer);
+    await fs.writeFile(absolutePath, buffer);
 
     return {
         fileName,
-        originalName: finalOriginalName,
+        originalName,
         fileUrl: `${PUBLIC_UPLOAD_PREFIX}/projects/tasks/${fileName}`,
         fileType: attachment.fileType,
         fileSize: buffer.length || attachment.fileSize || telegramFile.file_size || 0,
     };
+};
+
+const saveTaskAttachment = async (
+    projectId: Types.ObjectId,
+    taskId: Types.ObjectId,
+    actorId: Types.ObjectId,
+    chatId: string,
+    fileMessage: TelegramMessage,
+    attachment: TelegramAttachmentInput,
+): Promise<string> => {
+    const downloadedFile = await downloadTelegramAttachment(attachment);
+
+    await ProjectFile.create({
+        projectId,
+        taskId,
+        uploadedBy: actorId,
+        fileName: downloadedFile.fileName,
+        originalName: downloadedFile.originalName,
+        fileUrl: downloadedFile.fileUrl,
+        fileType:
+            downloadedFile.fileType ||
+            attachment.fileType ||
+            (attachment.kind === 'voice' ? 'audio/ogg' : ''),
+        fileSize: downloadedFile.fileSize || attachment.fileSize || 0,
+        category: TASK_ATTACHMENT_CATEGORY,
+        categoryLabel: TASK_ATTACHMENT_CATEGORY_LABEL,
+        source: 'telegram_bot',
+        telegramFileId: attachment.fileId,
+        telegramFileUniqueId: attachment.fileUniqueId || '',
+        telegramMessageId: fileMessage.message_id,
+        telegramChatId: chatId,
+        telegramAttachmentKind: attachment.kind,
+        language: 'fa',
+        direction: 'rtl',
+    } as any);
+
+    if (attachment.kind === 'voice') return 'ویس ضبط‌شده به وظیفه پیوست شد.';
+    if (attachment.kind === 'audio') return 'فایل صوتی به وظیفه پیوست شد.';
+
+    return 'پیوست وظیفه ثبت شد.';
 };
 
 const createTaskFromSession = async (
@@ -983,33 +972,23 @@ const createTaskFromSession = async (
     } as any);
 
     const attachment = fileMessage ? getTelegramAttachment(fileMessage) : null;
+    let attachmentMessage = 'وظیفه بدون پیوست ثبت شد.';
 
-    if (attachment) {
-        const downloadedFile = await downloadTelegramAttachment(attachment);
-
-        await ProjectFile.create({
-            projectId: project._id,
-            taskId: task._id,
-            uploadedBy: actor._id,
-            fileName: downloadedFile.fileName,
-            originalName: downloadedFile.originalName,
-            fileUrl: downloadedFile.fileUrl,
-            fileType:
-                downloadedFile.fileType ||
-                attachment.fileType ||
-                (attachment.kind === 'voice' ? 'audio/ogg' : ''),
-            fileSize: downloadedFile.fileSize || attachment.fileSize || 0,
-            category: TASK_ATTACHMENT_CATEGORY,
-            categoryLabel: TASK_ATTACHMENT_CATEGORY_LABEL,
-            source: 'telegram_bot',
-            telegramFileId: attachment.fileId,
-            telegramFileUniqueId: attachment.fileUniqueId || '',
-            telegramMessageId: fileMessage?.message_id || null,
-            telegramChatId: chatId,
-            telegramAttachmentKind: attachment.kind,
-            language: 'fa',
-            direction: 'rtl',
-        } as any);
+    if (attachment && fileMessage) {
+        try {
+            attachmentMessage = await saveTaskAttachment(
+                project._id,
+                task._id,
+                actor._id,
+                chatId,
+                fileMessage,
+                attachment,
+            );
+        } catch (error) {
+            console.error('Telegram task attachment save failed:', error);
+            attachmentMessage =
+                'وظیفه ثبت شد، اما ذخیره پیوست با خطا مواجه شد. لاگ سرور را بررسی کنید.';
+        }
     }
 
     await clearSession(chatId);
@@ -1022,11 +1001,7 @@ const createTaskFromSession = async (
             `پروژه: <b>${escapeHtml(getProjectTitle(project))}</b>`,
             `مدیر مسئول: <b>${escapeHtml(getUserDisplayName(manager))}</b>`,
             `وظیفه: <b>${escapeHtml(task.title)}</b>`,
-            attachment
-                ? attachment.kind === 'voice'
-                    ? 'ویس ضبط‌شده به وظیفه پیوست شد.'
-                    : 'پیوست وظیفه ثبت شد.'
-                : 'وظیفه بدون پیوست ثبت شد.',
+            attachmentMessage,
         ].join('\n'),
         buildTaskHomeKeyboard(),
     );
@@ -1080,16 +1055,7 @@ const handleCallbackQuery = async (
 
     if (data === 'task:cancel') {
         await clearSession(chatId);
-        await sendMessage(
-            chatId,
-            'فرآیند ثبت وظیفه لغو شد.',
-            buildTaskHomeKeyboard(),
-        );
-        return;
-    }
-
-    if (data === 'task:home') {
-        await showTaskHome(chatId, telegramUserId);
+        await sendMessage(chatId, 'فرآیند ثبت وظیفه لغو شد.', buildTaskHomeKeyboard());
         return;
     }
 
@@ -1123,11 +1089,7 @@ const handleCallbackQuery = async (
         return;
     }
 
-    await sendMessage(
-        chatId,
-        'دستور انتخاب‌شده معتبر نیست.',
-        buildTaskHomeKeyboard(),
-    );
+    await sendMessage(chatId, 'دستور انتخاب‌شده معتبر نیست.', buildTaskHomeKeyboard());
 };
 
 const handleTextMessage = async (
@@ -1277,11 +1239,6 @@ export const telegramTaskBotService = {
 
         if (!update.message) return;
 
-        /*
-          Critical:
-          Telegram recorded audio is message.voice.
-          This branch must run before text handling.
-        */
         if (messageHasAttachment(update.message)) {
             await handleAttachmentMessage(update.message);
             return;

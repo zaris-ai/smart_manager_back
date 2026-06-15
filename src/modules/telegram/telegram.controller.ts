@@ -31,7 +31,6 @@ const TASK_TEXT_COMMANDS = new Set([
     'ثبت وظیفه',
     'تعریف وظیفه',
     'ثبت وظیفه برای مدیران',
-
     '/tasks',
     '/mytasks',
     'وظایف باز من',
@@ -54,7 +53,7 @@ const getCallbackDataFromUpdate = (update: TelegramUpdate): string => {
     return String(update.callback_query?.data || '').trim();
 };
 
-const messageHasTaskAttachment = (message?: TelegramMessage): boolean => {
+const messageHasAttachment = (message?: TelegramMessage): boolean => {
     return Boolean(
         message?.voice ||
             message?.audio ||
@@ -87,16 +86,7 @@ const isTaskUpdate = async (update: TelegramUpdate): Promise<boolean> => {
         return true;
     }
 
-    /*
-      Critical for recorded Telegram audio:
-
-      A recorded Telegram voice message arrives as:
-      update.message.voice
-
-      It has no text. Therefore, it must be routed by active task session.
-      Without this branch, the voice goes to the old report bot or is ignored.
-    */
-    if (messageHasTaskAttachment(update.message)) {
+    if (messageHasAttachment(update.message)) {
         return hasActiveTaskSession(chatId);
     }
 
@@ -142,17 +132,7 @@ export const telegramWebhook = async (
             return;
         }
 
-        /*
-          Preserve previous bot features.
-
-          The old controller expects req.params.secret because the old route was:
-          /telegram/webhook/:secret
-
-          The new Telegram webhook uses x-telegram-bot-api-secret-token.
-          We inject the configured secret before delegating to the old handler.
-        */
         (req.params as any).secret = configuredSecret;
-
         await handlePreviousTelegramWebhook(req, res);
     } catch (error) {
         console.error('Telegram webhook bridge error:', error);

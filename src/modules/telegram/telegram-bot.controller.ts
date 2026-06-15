@@ -115,11 +115,9 @@ const buildBotGuideText = (user: BotUser): string => {
         '',
         'راهنمای ربات مدیریتی آوید:',
         '',
-        'با «ثبت گزارش پروژه» می‌توانید متن گزارش، فایل، عکس، ویدئو یا ویس را برای پروژه ثبت کنید.',
-        '',
-        'با «ثبت وظیفه» مدیر می‌تواند برای مدیر دیگر در یک پروژه وظیفه ثبت کند و در مرحله آخر ویس، فایل، عکس، ویدئو یا هیچ پیوستی ارسال کند.',
-        '',
-        'با «وظایف باز من» وظایف انجام‌نشده‌ای که به شما اختصاص داده شده یا توسط شما ایجاد شده‌اند نمایش داده می‌شود.',
+        'ثبت گزارش پروژه: متن، فایل، عکس، ویدئو یا ویس برای پروژه ثبت می‌شود.',
+        'ثبت وظیفه: مدیر می‌تواند برای مدیر دیگر وظیفه ثبت کند و در مرحله آخر ویس ضبط‌شده، فایل، عکس، ویدئو یا بدون پیوست ارسال کند.',
+        'وظایف باز من: وظایف انجام‌نشده شما نمایش داده می‌شود.',
         '',
         'دستورات سریع:',
         '/start - شروع و نمایش راهنما',
@@ -274,7 +272,6 @@ const sendProjectsList = async (
         await sendTelegramBotMessage(
             getChatId(message),
             'هیچ پروژه‌ای برای شما پیدا نشد.',
-            { replyMarkup: buildMainKeyboard() },
         );
         return;
     }
@@ -308,7 +305,7 @@ const extensionFromMime = (mimeType: string): string => {
 };
 
 const safeOriginalName = (value: string): string => {
-    const safe = String(value || '').replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    const safe = value.replace(/[^a-zA-Z0-9.\-_]/g, '_');
 
     return safe || 'telegram-file';
 };
@@ -353,25 +350,25 @@ const fileLikeToCandidate = (
 const getMediaCandidate = (
     message: TelegramMessagePayload,
 ): MediaCandidate | null => {
-    if (message.voice?.file_id) {
+    if (message.voice) {
         return fileLikeToCandidate(message.voice, 'voice', 'voice.ogg');
     }
 
-    if (message.audio?.file_id) {
+    if (message.audio) {
         return fileLikeToCandidate(message.audio, 'audio', 'audio');
     }
 
-    if (message.document?.file_id) {
+    if (message.document) {
         return fileLikeToCandidate(message.document, 'document', 'document');
     }
 
-    if (message.video?.file_id) {
+    if (message.video) {
         return fileLikeToCandidate(message.video, 'video', 'video.mp4');
     }
 
     const photo = getLargestPhoto(message.photo);
 
-    if (photo?.file_id) {
+    if (photo) {
         return {
             fileId: photo.file_id,
             fileUniqueId: photo.file_unique_id || '',
@@ -390,7 +387,7 @@ const saveTelegramMediaAsProjectFile = async (
     media: MediaCandidate,
     projectId: Types.ObjectId,
     uploadedBy: Types.ObjectId,
-    progressNoteId: Types.ObjectId | null,
+    progressNoteId?: Types.ObjectId | null,
 ) => {
     const telegramFile = await getTelegramFile(media.fileId);
 
@@ -399,14 +396,12 @@ const saveTelegramMediaAsProjectFile = async (
     }
 
     const buffer = await downloadTelegramFile(telegramFile.file_path);
-
     await fs.mkdir(uploadDir, { recursive: true });
 
     const originalName = originalNameFromFilePath(
         telegramFile.file_path,
         media.originalName,
     );
-
     const fileName = `${Date.now()}-${crypto.randomUUID()}-${originalName}`;
     const filePath = path.join(uploadDir, fileName);
 
@@ -414,7 +409,7 @@ const saveTelegramMediaAsProjectFile = async (
 
     return ProjectFile.create({
         projectId,
-        progressNoteId,
+        progressNoteId: progressNoteId || null,
         uploadedBy,
         fileName,
         originalName: safeOriginalName(media.originalName || originalName),
@@ -543,7 +538,7 @@ const handleProjectDescription = async (
 
     await sendTelegramBotMessage(
         getChatId(message),
-        'توضیح ثبت شد. حالا فایل، ویس، عکس، ویدئو یا سند پروژه را ارسال کنید. اگر فایل ندارید، گزینه زیر را بزنید.',
+        'توضیح ثبت شد. حالا فایل، ویس، عکس یا سند پروژه را ارسال کنید. اگر فایل ندارید، گزینه زیر را بزنید.',
         { replyMarkup: buildAttachmentKeyboard() },
     );
 };
@@ -557,7 +552,7 @@ const handleStart = async (message: TelegramMessagePayload, user: BotUser) => {
 
     await sendTelegramBotMessage(
         getChatId(message),
-        'از دکمه‌های زیر هم می‌توانید استفاده کنید:',
+        'از دکمه‌های داخل پیام هم می‌توانید استفاده کنید:',
         { replyMarkup: buildMainKeyboard() },
     );
 };
@@ -579,12 +574,12 @@ const handleCallback = async (callbackQuery: TelegramCallbackQueryPayload) => {
 
     const data = callbackQuery.data || '';
 
-    if (data === 'bot:add_report') {
-        await sendProjectSelection(message, user);
-        return;
-    }
+    if (data === 'bot:add_report' || data === 'bot:list_projects') {
+        if (data === 'bot:add_report') {
+            await sendProjectSelection(message, user);
+            return;
+        }
 
-    if (data === 'bot:list_projects') {
         await sendProjectsList(message, user);
         return;
     }
@@ -675,7 +670,7 @@ const handleMessage = async (message: TelegramMessagePayload) => {
         return;
     }
 
-    if (text === '/skip' || text === 'بدون فایل') {
+    if (text === '/skip' || text === 'بدون فایل' || text === 'بدون پیوست') {
         await completeAttachmentStep(message, user, null);
         return;
     }
