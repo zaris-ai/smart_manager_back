@@ -92,6 +92,7 @@ const buildMainKeyboard = () => ({
     inline_keyboard: [
         [{ text: 'ثبت گزارش پروژه', callback_data: 'bot:add_report' }],
         [{ text: 'ثبت وظیفه برای مدیران', callback_data: 'task:back:projects' }],
+        [{ text: 'وظایف باز من', callback_data: 'task:open_tasks' }],
         [{ text: 'فهرست پروژه‌های من', callback_data: 'bot:list_projects' }],
         [{ text: 'لغو عملیات جاری', callback_data: 'bot:cancel' }],
     ],
@@ -100,8 +101,8 @@ const buildMainKeyboard = () => ({
 const buildDefaultReplyKeyboard = () => ({
     keyboard: [
         [{ text: 'شروع / راهنما' }, { text: 'ثبت وظیفه' }],
-        [{ text: 'ثبت گزارش پروژه' }, { text: 'پروژه‌های من' }],
-        [{ text: 'لغو عملیات' }],
+        [{ text: 'وظایف باز من' }, { text: 'ثبت گزارش پروژه' }],
+        [{ text: 'پروژه‌های من' }, { text: 'لغو عملیات' }],
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
@@ -114,15 +115,16 @@ const buildBotGuideText = (user: BotUser): string => {
         '',
         'راهنمای ربات مدیریتی آوید:',
         '',
-        'با دکمه «ثبت گزارش پروژه» می‌توانید برای پروژه‌های خود گزارش، توضیح، فایل، عکس یا ویس ثبت کنید.',
+        'با «ثبت گزارش پروژه» می‌توانید متن گزارش، فایل، عکس، ویدئو یا ویس را برای پروژه ثبت کنید.',
         '',
-        'با دکمه «ثبت وظیفه» مدیر می‌تواند برای مدیر دیگر در یک پروژه وظیفه ثبت کند و در صورت نیاز فایل وظیفه را هم ارسال کند.',
+        'با «ثبت وظیفه» مدیر می‌تواند برای مدیر دیگر در یک پروژه وظیفه ثبت کند و در مرحله آخر ویس، فایل، عکس، ویدئو یا هیچ پیوستی ارسال کند.',
         '',
-        'با دکمه «پروژه‌های من» فهرست پروژه‌های قابل دسترسی نمایش داده می‌شود.',
+        'با «وظایف باز من» وظایف انجام‌نشده‌ای که به شما اختصاص داده شده یا توسط شما ایجاد شده‌اند نمایش داده می‌شود.',
         '',
         'دستورات سریع:',
         '/start - شروع و نمایش راهنما',
         '/task - ثبت وظیفه برای مدیران',
+        '/tasks - نمایش وظایف باز من',
         '/projects - نمایش پروژه‌های من',
         '/report - ثبت گزارش پروژه',
         '/cancel - لغو عملیات جاری',
@@ -272,6 +274,7 @@ const sendProjectsList = async (
         await sendTelegramBotMessage(
             getChatId(message),
             'هیچ پروژه‌ای برای شما پیدا نشد.',
+            { replyMarkup: buildMainKeyboard() },
         );
         return;
     }
@@ -305,7 +308,7 @@ const extensionFromMime = (mimeType: string): string => {
 };
 
 const safeOriginalName = (value: string): string => {
-    const safe = value.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    const safe = String(value || '').replace(/[^a-zA-Z0-9.\-_]/g, '_');
 
     return safe || 'telegram-file';
 };
@@ -350,25 +353,25 @@ const fileLikeToCandidate = (
 const getMediaCandidate = (
     message: TelegramMessagePayload,
 ): MediaCandidate | null => {
-    if (message.voice) {
+    if (message.voice?.file_id) {
         return fileLikeToCandidate(message.voice, 'voice', 'voice.ogg');
     }
 
-    if (message.audio) {
+    if (message.audio?.file_id) {
         return fileLikeToCandidate(message.audio, 'audio', 'audio');
     }
 
-    if (message.document) {
+    if (message.document?.file_id) {
         return fileLikeToCandidate(message.document, 'document', 'document');
     }
 
-    if (message.video) {
+    if (message.video?.file_id) {
         return fileLikeToCandidate(message.video, 'video', 'video.mp4');
     }
 
     const photo = getLargestPhoto(message.photo);
 
-    if (photo) {
+    if (photo?.file_id) {
         return {
             fileId: photo.file_id,
             fileUniqueId: photo.file_unique_id || '',
@@ -387,7 +390,7 @@ const saveTelegramMediaAsProjectFile = async (
     media: MediaCandidate,
     projectId: Types.ObjectId,
     uploadedBy: Types.ObjectId,
-    progressNoteId?: Types.ObjectId | null,
+    progressNoteId: Types.ObjectId | null,
 ) => {
     const telegramFile = await getTelegramFile(media.fileId);
 
@@ -396,12 +399,14 @@ const saveTelegramMediaAsProjectFile = async (
     }
 
     const buffer = await downloadTelegramFile(telegramFile.file_path);
+
     await fs.mkdir(uploadDir, { recursive: true });
 
     const originalName = originalNameFromFilePath(
         telegramFile.file_path,
         media.originalName,
     );
+
     const fileName = `${Date.now()}-${crypto.randomUUID()}-${originalName}`;
     const filePath = path.join(uploadDir, fileName);
 
@@ -409,7 +414,7 @@ const saveTelegramMediaAsProjectFile = async (
 
     return ProjectFile.create({
         projectId,
-        progressNoteId: progressNoteId || null,
+        progressNoteId,
         uploadedBy,
         fileName,
         originalName: safeOriginalName(media.originalName || originalName),
@@ -538,7 +543,7 @@ const handleProjectDescription = async (
 
     await sendTelegramBotMessage(
         getChatId(message),
-        'توضیح ثبت شد. حالا فایل، ویس، عکس یا سند پروژه را ارسال کنید. اگر فایل ندارید، گزینه زیر را بزنید.',
+        'توضیح ثبت شد. حالا فایل، ویس، عکس، ویدئو یا سند پروژه را ارسال کنید. اگر فایل ندارید، گزینه زیر را بزنید.',
         { replyMarkup: buildAttachmentKeyboard() },
     );
 };
@@ -574,12 +579,12 @@ const handleCallback = async (callbackQuery: TelegramCallbackQueryPayload) => {
 
     const data = callbackQuery.data || '';
 
-    if (data === 'bot:add_report' || data === 'bot:list_projects') {
-        if (data === 'bot:add_report') {
-            await sendProjectSelection(message, user);
-            return;
-        }
+    if (data === 'bot:add_report') {
+        await sendProjectSelection(message, user);
+        return;
+    }
 
+    if (data === 'bot:list_projects') {
         await sendProjectsList(message, user);
         return;
     }
@@ -670,7 +675,7 @@ const handleMessage = async (message: TelegramMessagePayload) => {
         return;
     }
 
-    if (text === '/skip') {
+    if (text === '/skip' || text === 'بدون فایل') {
         await completeAttachmentStep(message, user, null);
         return;
     }
@@ -697,7 +702,7 @@ const handleMessage = async (message: TelegramMessagePayload) => {
         if (!media) {
             await sendTelegramBotMessage(
                 getChatId(message),
-                'لطفاً فایل، ویس، عکس یا سند ارسال کنید یا /skip را بزنید.',
+                'لطفاً فایل، ویس، عکس، ویدئو یا سند ارسال کنید یا /skip را بزنید.',
                 { replyMarkup: buildAttachmentKeyboard() },
             );
             return;
@@ -709,7 +714,7 @@ const handleMessage = async (message: TelegramMessagePayload) => {
 
     await sendTelegramBotMessage(
         getChatId(message),
-        'برای ثبت گزارش پروژه از دکمه زیر استفاده کنید.',
+        'برای ثبت گزارش پروژه، ثبت وظیفه یا مشاهده وظایف باز از دکمه‌های زیر استفاده کنید.',
         { replyMarkup: buildMainKeyboard() },
     );
 };

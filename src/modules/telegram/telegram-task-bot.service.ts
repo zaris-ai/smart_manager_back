@@ -1,988 +1,1182 @@
-import fs from 'fs';
+import crypto from 'crypto';
+import fs from 'fs/promises';
 import path from 'path';
 import { Types } from 'mongoose';
 import TelegramTaskSession from './telegram-task-session.model';
 import User from '@/modules/users/user.model';
-import Project, {
-  ProjectFile,
-  ProjectTask,
+import {
+    Project,
+    ProjectFile,
+    ProjectFileCategory,
+    PROJECT_FILE_CATEGORY_LABELS,
+    ProjectTask,
 } from '@/modules/projects/project.model';
+import {
+    answerTelegramCallbackQuery,
+    downloadTelegramFile,
+    escapeTelegramHtml,
+    getTelegramFile,
+    sendTelegramBotMessage,
+} from '@/modules/telegram/telegram.service';
+import { TelegramReplyMarkup } from '@/modules/telegram/telegram.types';
 
-type TelegramMessage = {
-  message_id: number;
-  text?: string;
-  caption?: string;
-  chat: {
-    id: number | string;
-  };
-  from?: {
-    id?: number;
-    username?: string;
-    first_name?: string;
-    last_name?: string;
-  };
-  document?: {
+type TelegramFileLike = {
     file_id: string;
+    file_unique_id?: string;
     file_name?: string;
     mime_type?: string;
     file_size?: number;
-  };
-  photo?: Array<{
+    duration?: number;
+};
+
+type TelegramPhotoSize = {
     file_id: string;
     file_unique_id?: string;
     file_size?: number;
     width?: number;
     height?: number;
-  }>;
+};
+
+type TelegramMessage = {
+    message_id: number;
+    text?: string;
+    caption?: string;
+    chat: {
+        id: number | string;
+    };
+    from?: {
+        id?: number;
+        username?: string;
+        first_name?: string;
+        last_name?: string;
+    };
+    voice?: TelegramFileLike;
+    audio?: TelegramFileLike;
+    document?: TelegramFileLike;
+    video?: TelegramFileLike;
+    photo?: TelegramPhotoSize[];
 };
 
 type TelegramCallbackQuery = {
-  id: string;
-  data?: string;
-  message?: TelegramMessage;
-  from?: {
-    id?: number;
-    username?: string;
-    first_name?: string;
-    last_name?: string;
-  };
+    id: string;
+    data?: string;
+    message?: TelegramMessage;
+    from?: {
+        id?: number;
+        username?: string;
+        first_name?: string;
+        last_name?: string;
+    };
 };
 
 type TelegramUpdate = {
-  update_id: number;
-  message?: TelegramMessage;
-  callback_query?: TelegramCallbackQuery;
+    update_id: number;
+    message?: TelegramMessage;
+    callback_query?: TelegramCallbackQuery;
 };
 
 type TelegramAttachmentInput = {
-  fileId: string;
-  originalName: string;
-  fileType?: string;
-  fileSize?: number;
+    fileId: string;
+    fileUniqueId?: string;
+    originalName: string;
+    fileType?: string;
+    fileSize?: number;
+    kind: 'voice' | 'audio' | 'document' | 'photo' | 'video';
 };
 
 type DownloadedTelegramFile = {
-  fileName: string;
-  originalName: string;
-  fileUrl: string;
-  fileType?: string;
-  fileSize?: number;
+    fileName: string;
+    originalName: string;
+    fileUrl: string;
+    fileType?: string;
+    fileSize?: number;
 };
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const TELEGRAM_API_BASE_URL = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
-const TELEGRAM_FILE_BASE_URL = `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}`;
-
-const UPLOAD_ROOT =
-  process.env.UPLOAD_ROOT || path.join(process.cwd(), 'uploads');
-const PUBLIC_UPLOAD_PREFIX = process.env.PUBLIC_UPLOAD_PREFIX || '/uploads';
+const uploadDir = path.join(process.cwd(), 'uploads', 'projects');
 
 const ROLE_MANAGER = 'manager';
 const STATUS_CANCELLED = 'cancelled';
+const TASK_STATUS_DONE = 'done';
+const TASK_STATUS_CANCELLED = 'cancelled';
 
-const ensureBotToken = (): void => {
-  if (!TELEGRAM_BOT_TOKEN) {
-    throw new Error('TELEGRAM_BOT_TOKEN is not configured.');
-  }
-};
+const TASK_ATTACHMENT_CATEGORY =
+    (ProjectFileCategory as any).TASK_ATTACHMENT || 'task_attachment';
+
+const TASK_ATTACHMENT_CATEGORY_LABEL =
+    (PROJECT_FILE_CATEGORY_LABELS as any)[TASK_ATTACHMENT_CATEGORY] ||
+    'پیوست وظیفه';
 
 const getChatId = (message?: TelegramMessage): string => {
-  return String(message?.chat?.id || '');
+    return String(message?.chat?.id || '');
 };
 
 const getTelegramUserId = (
-  message?: TelegramMessage,
-  callbackQuery?: TelegramCallbackQuery,
+    message?: TelegramMessage,
+    callbackQuery?: TelegramCallbackQuery,
 ): string => {
-  return String(message?.from?.id || callbackQuery?.from?.id || '');
-};
-
-const escapeHtml = (value: string): string => {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-};
-
-const sendTelegramRequest = async <T = any>(
-  method: string,
-  payload: Record<string, any>,
-): Promise<T> => {
-  ensureBotToken();
-
-  const response = await fetch(`${TELEGRAM_API_BASE_URL}/${method}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok || !data?.ok) {
-    throw new Error(
-      data?.description || `Telegram API request failed: ${method}`,
-    );
-  }
-
-  return data.result as T;
+    return String(message?.from?.id || callbackQuery?.from?.id || '');
 };
 
 const sendMessage = async (
-  chatId: string,
-  text: string,
-  replyMarkup?: Record<string, any>,
+    chatId: string,
+    text: string,
+    replyMarkup?: TelegramReplyMarkup,
 ): Promise<void> => {
-  await sendTelegramRequest('sendMessage', {
-    chat_id: chatId,
-    text,
-    parse_mode: 'HTML',
-    reply_markup: replyMarkup,
-  });
+    await sendTelegramBotMessage(chatId, text, {
+        parseMode: 'HTML',
+        replyMarkup,
+    });
 };
 
 const answerCallbackQuery = async (
-  callbackQueryId: string,
-  text?: string,
+    callbackQueryId: string,
+    text?: string,
 ): Promise<void> => {
-  await sendTelegramRequest('answerCallbackQuery', {
-    callback_query_id: callbackQueryId,
-    text,
-    show_alert: false,
-  });
+    await answerTelegramCallbackQuery(callbackQueryId, text).catch(() => undefined);
 };
 
 const buildInlineKeyboard = (
-  rows: Array<Array<{ text: string; callback_data: string }>>,
-): Record<string, any> => {
-  return {
-    inline_keyboard: rows,
-  };
+    rows: Array<Array<{ text: string; callback_data: string }>>,
+): TelegramReplyMarkup => {
+    return {
+        inline_keyboard: rows,
+    };
+};
+
+const buildTaskHomeKeyboard = (): TelegramReplyMarkup => {
+    return buildInlineKeyboard([
+        [
+            {
+                text: 'ثبت وظیفه برای مدیران',
+                callback_data: 'task:create',
+            },
+        ],
+        [
+            {
+                text: 'وظایف باز من',
+                callback_data: 'task:open_tasks',
+            },
+        ],
+        [
+            {
+                text: 'لغو',
+                callback_data: 'task:cancel',
+            },
+        ],
+    ]);
 };
 
 const getUserDisplayName = (user: any): string => {
-  return (
-    user?.fullName ||
-    [user?.firstName, user?.lastName].filter(Boolean).join(' ') ||
-    user?.username ||
-    user?.email ||
-    'کاربر بدون نام'
-  );
+    return (
+        user?.fullName ||
+        [user?.firstName, user?.lastName].filter(Boolean).join(' ') ||
+        user?.username ||
+        user?.email ||
+        'کاربر بدون نام'
+    );
 };
 
 const getProjectTitle = (project: any): string => {
-  return project?.title || project?.name || 'پروژه بدون عنوان';
+    return project?.title || project?.name || 'پروژه بدون عنوان';
+};
+
+const getProjectTitleFromTask = (task: any): string => {
+    const project = task?.projectId;
+
+    if (project && typeof project === 'object') {
+        return getProjectTitle(project);
+    }
+
+    return 'پروژه نامشخص';
+};
+
+const getTaskStatusLabel = (status?: string): string => {
+    const labels: Record<string, string> = {
+        todo: 'برای انجام',
+        in_progress: 'در حال انجام',
+        blocked: 'مسدود',
+        done: 'انجام‌شده',
+        cancelled: 'لغوشده',
+    };
+
+    return labels[String(status || '')] || String(status || 'نامشخص');
+};
+
+const formatDate = (value?: Date | string | null): string => {
+    if (!value) return 'ندارد';
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) return 'ندارد';
+
+    return new Intl.DateTimeFormat('fa-IR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(date);
 };
 
 const findActorByTelegram = async (
-  telegramUserId: string,
-  chatId: string,
+    telegramUserId: string,
+    chatId: string,
 ): Promise<any | null> => {
-  return User.findOne({
-    isActive: true,
-    $or: [
-      {
-        telegramUserId,
-      },
-      {
-        telegramChatId: chatId,
-      },
-    ],
-  } as any);
+    return User.findOne({
+        isActive: true,
+        $or: [
+            {
+                telegramUserId,
+            },
+            {
+                telegramChatId: chatId,
+            },
+        ],
+    } as any);
+};
+
+const ensureLinkedActor = async (
+    chatId: string,
+    telegramUserId: string,
+): Promise<any | null> => {
+    const actor = await findActorByTelegram(telegramUserId, chatId);
+
+    if (!actor) {
+        await sendMessage(
+            chatId,
+            'حساب تلگرام شما به هیچ کاربری در پنل متصل نیست. ابتدا اتصال تلگرام کاربر را در پنل انجام دهید.',
+        );
+        return null;
+    }
+
+    return actor;
 };
 
 const ensureManagerActor = async (
-  chatId: string,
-  telegramUserId: string,
+    chatId: string,
+    telegramUserId: string,
 ): Promise<any | null> => {
-  const actor = await findActorByTelegram(telegramUserId, chatId);
+    const actor = await ensureLinkedActor(chatId, telegramUserId);
 
-  if (!actor) {
-    await sendMessage(
-      chatId,
-      'حساب تلگرام شما به هیچ کاربری در پنل متصل نیست. ابتدا اتصال تلگرام کاربر را در پنل انجام دهید.',
-    );
-    return null;
-  }
+    if (!actor) return null;
 
-  if (String(actor.role) !== ROLE_MANAGER) {
-    await sendMessage(
-      chatId,
-      'فقط مدیران می‌توانند از طریق بات برای مدیران دیگر وظیفه ثبت کنند.',
-    );
-    return null;
-  }
+    if (String(actor.role) !== ROLE_MANAGER) {
+        await sendMessage(
+            chatId,
+            'فقط مدیران می‌توانند از طریق بات برای مدیران دیگر وظیفه ثبت کنند.',
+        );
+        return null;
+    }
 
-  return actor;
+    return actor;
 };
 
 const clearSession = async (chatId: string): Promise<void> => {
-  await TelegramTaskSession.deleteMany({
-    chatId,
-  } as any);
+    await TelegramTaskSession.deleteMany({
+        chatId,
+    } as any);
+};
+
+const showTaskHome = async (
+    chatId: string,
+    telegramUserId: string,
+): Promise<void> => {
+    const actor = await ensureLinkedActor(chatId, telegramUserId);
+    if (!actor) return;
+
+    await sendMessage(
+        chatId,
+        [
+            `سلام ${escapeTelegramHtml(getUserDisplayName(actor))}.`,
+            '',
+            'از این بخش می‌توانید وظیفه مدیریتی ثبت کنید یا وظایف باز خود را ببینید.',
+            '',
+            'ثبت وظیفه: انتخاب پروژه، انتخاب مدیر، نوشتن وظیفه، سپس ارسال ویس/فایل/عکس/ویدئو یا ثبت بدون پیوست.',
+        ].join('\n'),
+        buildTaskHomeKeyboard(),
+    );
 };
 
 const startTaskFlow = async (
-  chatId: string,
-  telegramUserId: string,
+    chatId: string,
+    telegramUserId: string,
 ): Promise<void> => {
-  const actor = await ensureManagerActor(chatId, telegramUserId);
-  if (!actor) return;
-
-  await TelegramTaskSession.findOneAndUpdate(
-    {
-      chatId,
-      actorUserId: actor._id,
-    } as any,
-    {
-      chatId,
-      telegramUserId,
-      actorUserId: actor._id,
-      step: 'select_project',
-      selectedProjectId: undefined,
-      selectedManagerId: undefined,
-      taskTitle: undefined,
-      taskDescription: undefined,
-    },
-    {
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true,
-    },
-  );
-
-  const projects = await Project.find({
-    status: {
-      $nin: [STATUS_CANCELLED],
-    },
-  } as any)
-    .sort({
-      updatedAt: -1,
-    })
-    .limit(20)
-    .select('title name status priority ownerId assignedUserIds');
-
-  if (!projects.length) {
-    await sendMessage(chatId, 'هیچ پروژه‌ای برای ثبت وظیفه پیدا نشد.');
-    await clearSession(chatId);
-    return;
-  }
-
-  const rows = projects.map((project: any) => [
-    {
-      text: getProjectTitle(project).slice(0, 55),
-      callback_data: `task:project:${project._id.toString()}`,
-    },
-  ]);
-
-  rows.push([
-    {
-      text: 'انصراف',
-      callback_data: 'task:cancel',
-    },
-  ]);
-
-  await sendMessage(
-    chatId,
-    'پروژه‌ای که می‌خواهید برای آن وظیفه ثبت کنید را انتخاب کنید:',
-    buildInlineKeyboard(rows),
-  );
-};
-
-const handleProjectSelected = async (
-  chatId: string,
-  telegramUserId: string,
-  projectId: string,
-): Promise<void> => {
-  const actor = await ensureManagerActor(chatId, telegramUserId);
-  if (!actor) return;
-
-  if (!Types.ObjectId.isValid(projectId)) {
-    await sendMessage(chatId, 'شناسه پروژه معتبر نیست.');
-    await clearSession(chatId);
-    return;
-  }
-
-  const project = await Project.findById(projectId)
-    .populate(
-      'ownerId',
-      'firstName lastName fullName username email role isActive',
-    )
-    .populate(
-      'assignedUserIds',
-      'firstName lastName fullName username email role isActive',
-    );
-
-  if (!project) {
-    await sendMessage(chatId, 'پروژه انتخاب‌شده پیدا نشد.');
-    await clearSession(chatId);
-    return;
-  }
-
-  await TelegramTaskSession.findOneAndUpdate(
-    {
-      chatId,
-      actorUserId: actor._id,
-    } as any,
-    {
-      step: 'select_manager',
-      selectedProjectId: project._id,
-      selectedManagerId: undefined,
-      taskTitle: undefined,
-      taskDescription: undefined,
-    },
-  );
-
-  const projectUsers = [
-    (project as any).ownerId,
-    ...(Array.isArray((project as any).assignedUserIds)
-      ? (project as any).assignedUserIds
-      : []),
-  ].filter(Boolean);
-
-  const managerMap = new Map<string, any>();
-
-  projectUsers.forEach((user: any) => {
-    if (
-      user &&
-      user._id &&
-      String(user.role) === ROLE_MANAGER &&
-      user.isActive !== false
-    ) {
-      managerMap.set(user._id.toString(), user);
-    }
-  });
-
-  let managers = Array.from(managerMap.values());
-
-  if (!managers.length) {
-    managers = await User.find({
-      role: ROLE_MANAGER,
-      isActive: true,
-    } as any)
-      .sort({
-        fullName: 1,
-        username: 1,
-      })
-      .limit(30)
-      .select('firstName lastName fullName username email role isActive');
-  }
-
-  if (!managers.length) {
-    await sendMessage(chatId, 'هیچ مدیر فعالی برای تخصیص وظیفه پیدا نشد.');
-    await clearSession(chatId);
-    return;
-  }
-
-  const rows = managers.map((manager: any) => [
-    {
-      text: getUserDisplayName(manager).slice(0, 55),
-      callback_data: `task:manager:${manager._id.toString()}`,
-    },
-  ]);
-
-  rows.push([
-    {
-      text: 'بازگشت به انتخاب پروژه',
-      callback_data: 'task:back:projects',
-    },
-    {
-      text: 'انصراف',
-      callback_data: 'task:cancel',
-    },
-  ]);
-
-  await sendMessage(
-    chatId,
-    `پروژه انتخاب شد: <b>${escapeHtml(
-      getProjectTitle(project),
-    )}</b>\n\nمدیری که وظیفه باید برای او ثبت شود را انتخاب کنید:`,
-    buildInlineKeyboard(rows),
-  );
-};
-
-const handleManagerSelected = async (
-  chatId: string,
-  telegramUserId: string,
-  managerId: string,
-): Promise<void> => {
-  const actor = await ensureManagerActor(chatId, telegramUserId);
-  if (!actor) return;
-
-  if (!Types.ObjectId.isValid(managerId)) {
-    await sendMessage(chatId, 'شناسه مدیر معتبر نیست.');
-    await clearSession(chatId);
-    return;
-  }
-
-  const session = await TelegramTaskSession.findOne({
-    chatId,
-    actorUserId: actor._id,
-  } as any);
-
-  if (!session || !session.selectedProjectId) {
-    await sendMessage(
-      chatId,
-      'فرآیند ثبت وظیفه پیدا نشد. دوباره /task را ارسال کنید.',
-    );
-    await clearSession(chatId);
-    return;
-  }
-
-  const manager = await User.findOne({
-    _id: new Types.ObjectId(managerId),
-    role: ROLE_MANAGER,
-    isActive: true,
-  } as any);
-
-  if (!manager) {
-    await sendMessage(chatId, 'مدیر انتخاب‌شده پیدا نشد یا فعال نیست.');
-    await clearSession(chatId);
-    return;
-  }
-
-  await TelegramTaskSession.findOneAndUpdate(
-    {
-      chatId,
-      actorUserId: actor._id,
-    } as any,
-    {
-      step: 'enter_task',
-      selectedManagerId: manager._id,
-    },
-  );
-
-  await sendMessage(
-    chatId,
-    `مدیر انتخاب شد: <b>${escapeHtml(
-      getUserDisplayName(manager),
-    )}</b>\n\nمتن وظیفه را ارسال کنید.\n\nپیشنهاد:\nخط اول = عنوان وظیفه\nخط‌های بعدی = توضیحات`,
-    buildInlineKeyboard([
-      [
-        {
-          text: 'انصراف',
-          callback_data: 'task:cancel',
-        },
-      ],
-    ]),
-  );
-};
-
-const parseTaskText = (
-  text: string,
-): {
-  title: string;
-  description: string;
-} => {
-  const lines = text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const title = lines[0] || text.trim();
-  const description = lines.slice(1).join('\n').trim();
-
-  return {
-    title: title.slice(0, 180),
-    description,
-  };
-};
-
-const handleTaskText = async (
-  chatId: string,
-  telegramUserId: string,
-  text: string,
-): Promise<void> => {
-  const actor = await ensureManagerActor(chatId, telegramUserId);
-  if (!actor) return;
-
-  const session = await TelegramTaskSession.findOne({
-    chatId,
-    actorUserId: actor._id,
-  } as any);
-
-  if (
-    !session ||
-    session.step !== 'enter_task' ||
-    !session.selectedProjectId ||
-    !session.selectedManagerId
-  ) {
-    await sendMessage(chatId, 'برای ثبت وظیفه ابتدا /task را ارسال کنید.');
-    await clearSession(chatId);
-    return;
-  }
-
-  const parsed = parseTaskText(text);
-
-  if (!parsed.title || parsed.title.length < 3) {
-    await sendMessage(chatId, 'عنوان وظیفه باید حداقل ۳ کاراکتر باشد.');
-    return;
-  }
-
-  await TelegramTaskSession.findOneAndUpdate(
-    {
-      chatId,
-      actorUserId: actor._id,
-    } as any,
-    {
-      step: 'optional_file',
-      taskTitle: parsed.title,
-      taskDescription: parsed.description,
-    },
-  );
-
-  await sendMessage(
-    chatId,
-    `وظیفه ثبت موقت شد:\n<b>${escapeHtml(
-      parsed.title,
-    )}</b>\n\nاگر فایل دارید همین حالا ارسال کنید. در غیر این صورت روی «بدون فایل» بزنید.`,
-    buildInlineKeyboard([
-      [
-        {
-          text: 'بدون فایل',
-          callback_data: 'task:file:none',
-        },
-      ],
-      [
-        {
-          text: 'انصراف',
-          callback_data: 'task:cancel',
-        },
-      ],
-    ]),
-  );
-};
-
-const downloadTelegramFile = async (
-  fileId: string,
-  fallbackName: string,
-): Promise<DownloadedTelegramFile> => {
-  ensureBotToken();
-
-  const fileInfoResponse = await fetch(`${TELEGRAM_API_BASE_URL}/getFile`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      file_id: fileId,
-    }),
-  });
-
-  const fileInfoData = await fileInfoResponse.json().catch(() => null);
-
-  if (
-    !fileInfoResponse.ok ||
-    !fileInfoData?.ok ||
-    !fileInfoData?.result?.file_path
-  ) {
-    throw new Error('Telegram file info could not be fetched.');
-  }
-
-  const telegramFilePath = fileInfoData.result.file_path as string;
-  const extension = path.extname(telegramFilePath) || path.extname(fallbackName);
-  const safeOriginalName = fallbackName || `telegram-file${extension || ''}`;
-  const fileName = `${Date.now()}-${Math.round(
-    Math.random() * 1e9,
-  )}${extension}`;
-
-  const relativeDir = path.join('projects', 'tasks');
-  const absoluteDir = path.join(UPLOAD_ROOT, relativeDir);
-
-  fs.mkdirSync(absoluteDir, {
-    recursive: true,
-  });
-
-  const absolutePath = path.join(absoluteDir, fileName);
-  const fileResponse = await fetch(`${TELEGRAM_FILE_BASE_URL}/${telegramFilePath}`);
-
-  if (!fileResponse.ok) {
-    throw new Error('Telegram file could not be downloaded.');
-  }
-
-  const arrayBuffer = await fileResponse.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  fs.writeFileSync(absolutePath, buffer);
-
-  return {
-    fileName,
-    originalName: safeOriginalName,
-    fileUrl: `${PUBLIC_UPLOAD_PREFIX}/projects/tasks/${fileName}`,
-    fileSize: buffer.length,
-  };
-};
-
-const getTelegramAttachment = (
-  message: TelegramMessage,
-): TelegramAttachmentInput | null => {
-  if (message.document?.file_id) {
-    return {
-      fileId: message.document.file_id,
-      originalName: message.document.file_name || 'telegram-document',
-      fileType: message.document.mime_type,
-      fileSize: message.document.file_size,
-    };
-  }
-
-  if (message.photo?.length) {
-    const largestPhoto = [...message.photo].sort(
-      (a, b) => (b.file_size || 0) - (a.file_size || 0),
-    )[0];
-
-    if (largestPhoto?.file_id) {
-      return {
-        fileId: largestPhoto.file_id,
-        originalName: `telegram-photo-${
-          largestPhoto.file_unique_id || Date.now()
-        }.jpg`,
-        fileType: 'image/jpeg',
-        fileSize: largestPhoto.file_size,
-      };
-    }
-  }
-
-  return null;
-};
-
-const createTaskFromSession = async (
-  chatId: string,
-  actor: any,
-  fileMessage?: TelegramMessage,
-): Promise<void> => {
-  const session = await TelegramTaskSession.findOne({
-    chatId,
-    actorUserId: actor._id,
-  } as any);
-
-  if (
-    !session ||
-    session.step !== 'optional_file' ||
-    !session.selectedProjectId ||
-    !session.selectedManagerId ||
-    !session.taskTitle
-  ) {
-    await sendMessage(
-      chatId,
-      'اطلاعات وظیفه کامل نیست. دوباره /task را ارسال کنید.',
-    );
-    await clearSession(chatId);
-    return;
-  }
-
-  const project = await Project.findById(session.selectedProjectId);
-
-  if (!project) {
-    await sendMessage(chatId, 'پروژه انتخاب‌شده پیدا نشد.');
-    await clearSession(chatId);
-    return;
-  }
-
-  const manager = await User.findOne({
-    _id: session.selectedManagerId,
-    role: ROLE_MANAGER,
-    isActive: true,
-  } as any);
-
-  if (!manager) {
-    await sendMessage(chatId, 'مدیر انتخاب‌شده پیدا نشد یا فعال نیست.');
-    await clearSession(chatId);
-    return;
-  }
-
-  const task = await ProjectTask.create({
-    projectId: project._id,
-    title: session.taskTitle,
-    description: session.taskDescription || '',
-    assignedUserIds: [manager._id],
-    status: 'todo',
-    priority: 'medium',
-    startDate: new Date(),
-    dueDate: null,
-    completedAt: null,
-    createdBy: actor._id,
-    updatedBy: actor._id,
-    source: 'telegram_bot',
-    telegramChatId: chatId,
-  } as any);
-
-  const attachment = fileMessage ? getTelegramAttachment(fileMessage) : null;
-
-  if (attachment) {
-    const downloadedFile = await downloadTelegramFile(
-      attachment.fileId,
-      attachment.originalName,
-    );
-
-    await ProjectFile.create({
-      projectId: project._id,
-      taskId: task._id,
-      uploadedBy: actor._id,
-      fileName: downloadedFile.fileName,
-      originalName: downloadedFile.originalName,
-      fileUrl: downloadedFile.fileUrl,
-      fileType: attachment.fileType,
-      fileSize: downloadedFile.fileSize || attachment.fileSize || 0,
-      category: 'task_attachment',
-      source: 'telegram_bot',
-      telegramChatId: chatId,
-    } as any);
-  }
-
-  await clearSession(chatId);
-
-  await sendMessage(
-    chatId,
-    [
-      'وظیفه با موفقیت ثبت شد.',
-      '',
-      `پروژه: <b>${escapeHtml(getProjectTitle(project))}</b>`,
-      `مدیر مسئول: <b>${escapeHtml(getUserDisplayName(manager))}</b>`,
-      `وظیفه: <b>${escapeHtml(task.title)}</b>`,
-      attachment ? 'فایل پیوست شد.' : 'بدون فایل ثبت شد.',
-    ].join('\n'),
-  );
-};
-
-const handleOptionalFileMessage = async (
-  chatId: string,
-  telegramUserId: string,
-  message: TelegramMessage,
-): Promise<void> => {
-  const actor = await ensureManagerActor(chatId, telegramUserId);
-  if (!actor) return;
-
-  const attachment = getTelegramAttachment(message);
-
-  if (!attachment) {
-    await sendMessage(
-      chatId,
-      'در این مرحله فقط فایل، عکس یا گزینه «بدون فایل» قابل قبول است.',
-      buildInlineKeyboard([
-        [
-          {
-            text: 'بدون فایل',
-            callback_data: 'task:file:none',
-          },
-        ],
-        [
-          {
-            text: 'انصراف',
-            callback_data: 'task:cancel',
-          },
-        ],
-      ]),
-    );
-    return;
-  }
-
-  await createTaskFromSession(chatId, actor, message);
-};
-
-const handleCallbackQuery = async (
-  callbackQuery: TelegramCallbackQuery,
-): Promise<void> => {
-  const data = callbackQuery.data || '';
-  const chatId = getChatId(callbackQuery.message);
-  const telegramUserId = getTelegramUserId(undefined, callbackQuery);
-
-  if (!chatId) return;
-
-  await answerCallbackQuery(callbackQuery.id);
-
-  if (data === 'task:cancel') {
-    await clearSession(chatId);
-    await sendMessage(chatId, 'فرآیند ثبت وظیفه لغو شد.');
-    return;
-  }
-
-  if (data === 'task:back:projects') {
-    await startTaskFlow(chatId, telegramUserId);
-    return;
-  }
-
-  if (data.startsWith('task:project:')) {
-    const projectId = data.replace('task:project:', '');
-    await handleProjectSelected(chatId, telegramUserId, projectId);
-    return;
-  }
-
-  if (data.startsWith('task:manager:')) {
-    const managerId = data.replace('task:manager:', '');
-    await handleManagerSelected(chatId, telegramUserId, managerId);
-    return;
-  }
-
-  if (data === 'task:file:none') {
     const actor = await ensureManagerActor(chatId, telegramUserId);
     if (!actor) return;
 
-    await createTaskFromSession(chatId, actor);
-    return;
-  }
+    await TelegramTaskSession.findOneAndUpdate(
+        {
+            chatId,
+            actorUserId: actor._id,
+        } as any,
+        {
+            chatId,
+            telegramUserId,
+            actorUserId: actor._id,
+            step: 'select_project',
+            selectedProjectId: undefined,
+            selectedManagerId: undefined,
+            taskTitle: undefined,
+            taskDescription: undefined,
+        },
+        {
+            upsert: true,
+            new: true,
+            setDefaultsOnInsert: true,
+        },
+    );
 
-  await sendMessage(chatId, 'دستور انتخاب‌شده معتبر نیست.');
+    const projects = await Project.find({
+        status: {
+            $nin: [STATUS_CANCELLED],
+        },
+    } as any)
+        .sort({
+            updatedAt: -1,
+        })
+        .limit(20)
+        .select('title name status priority ownerId assignedUserIds');
+
+    if (!projects.length) {
+        await sendMessage(chatId, 'هیچ پروژه‌ای برای ثبت وظیفه پیدا نشد.');
+        await clearSession(chatId);
+        return;
+    }
+
+    const rows = projects.map((project: any) => [
+        {
+            text: getProjectTitle(project).slice(0, 55),
+            callback_data: `task:project:${project._id.toString()}`,
+        },
+    ]);
+
+    rows.push([
+        {
+            text: 'وظایف باز من',
+            callback_data: 'task:open_tasks',
+        },
+        {
+            text: 'انصراف',
+            callback_data: 'task:cancel',
+        },
+    ]);
+
+    await sendMessage(
+        chatId,
+        'پروژه‌ای که می‌خواهید برای آن وظیفه ثبت کنید را انتخاب کنید:',
+        buildInlineKeyboard(rows),
+    );
+};
+
+const listOpenTasks = async (
+    chatId: string,
+    telegramUserId: string,
+): Promise<void> => {
+    const actor = await ensureLinkedActor(chatId, telegramUserId);
+    if (!actor) return;
+
+    const openStatusFilter = {
+        $nin: [TASK_STATUS_DONE, TASK_STATUS_CANCELLED],
+    };
+
+    const filter =
+        String(actor.role) === ROLE_MANAGER
+            ? {
+                  status: openStatusFilter,
+                  $or: [
+                      {
+                          assignedUserIds: actor._id,
+                      },
+                      {
+                          createdBy: actor._id,
+                      },
+                  ],
+              }
+            : {
+                  status: openStatusFilter,
+                  assignedUserIds: actor._id,
+              };
+
+    const tasks = await ProjectTask.find(filter as any)
+        .populate('projectId', 'title name status')
+        .populate('assignedUserIds', 'firstName lastName fullName username email role')
+        .sort({
+            dueDate: 1,
+            updatedAt: -1,
+            createdAt: -1,
+        })
+        .limit(20);
+
+    if (!tasks.length) {
+        await sendMessage(
+            chatId,
+            'هیچ وظیفه باز و انجام‌نشده‌ای برای شما پیدا نشد.',
+            buildTaskHomeKeyboard(),
+        );
+        return;
+    }
+
+    const lines = [
+        'وظایف باز شما:',
+        '',
+        ...tasks.map((task: any, index: number) => {
+            const assignedUsers = Array.isArray(task.assignedUserIds)
+                ? task.assignedUserIds.map(getUserDisplayName).filter(Boolean)
+                : [];
+
+            return [
+                `${index + 1}. <b>${escapeTelegramHtml(task.title)}</b>`,
+                `پروژه: ${escapeTelegramHtml(getProjectTitleFromTask(task))}`,
+                `وضعیت: ${escapeTelegramHtml(getTaskStatusLabel(task.status))}`,
+                `مسئول: ${escapeTelegramHtml(assignedUsers.join('، ') || 'نامشخص')}`,
+                `مهلت: ${escapeTelegramHtml(formatDate(task.dueDate))}`,
+            ].join('\n');
+        }),
+    ];
+
+    await sendMessage(chatId, lines.join('\n\n'), buildTaskHomeKeyboard());
+};
+
+const handleProjectSelected = async (
+    chatId: string,
+    telegramUserId: string,
+    projectId: string,
+): Promise<void> => {
+    const actor = await ensureManagerActor(chatId, telegramUserId);
+    if (!actor) return;
+
+    if (!Types.ObjectId.isValid(projectId)) {
+        await sendMessage(chatId, 'شناسه پروژه معتبر نیست.');
+        await clearSession(chatId);
+        return;
+    }
+
+    const project = await Project.findById(projectId)
+        .populate(
+            'ownerId',
+            'firstName lastName fullName username email role isActive',
+        )
+        .populate(
+            'assignedUserIds',
+            'firstName lastName fullName username email role isActive',
+        );
+
+    if (!project) {
+        await sendMessage(chatId, 'پروژه انتخاب‌شده پیدا نشد.');
+        await clearSession(chatId);
+        return;
+    }
+
+    await TelegramTaskSession.findOneAndUpdate(
+        {
+            chatId,
+            actorUserId: actor._id,
+        } as any,
+        {
+            step: 'select_manager',
+            selectedProjectId: project._id,
+            selectedManagerId: undefined,
+            taskTitle: undefined,
+            taskDescription: undefined,
+        },
+    );
+
+    const projectUsers = [
+        (project as any).ownerId,
+        ...(Array.isArray((project as any).assignedUserIds)
+            ? (project as any).assignedUserIds
+            : []),
+    ].filter(Boolean);
+
+    const managerMap = new Map<string, any>();
+
+    projectUsers.forEach((user: any) => {
+        if (
+            user &&
+            user._id &&
+            String(user.role) === ROLE_MANAGER &&
+            user.isActive !== false
+        ) {
+            managerMap.set(user._id.toString(), user);
+        }
+    });
+
+    let managers = Array.from(managerMap.values());
+
+    if (!managers.length) {
+        managers = await User.find({
+            role: ROLE_MANAGER,
+            isActive: true,
+        } as any)
+            .sort({
+                fullName: 1,
+                username: 1,
+            })
+            .limit(30)
+            .select('firstName lastName fullName username email role isActive');
+    }
+
+    if (!managers.length) {
+        await sendMessage(chatId, 'هیچ مدیر فعالی برای تخصیص وظیفه پیدا نشد.');
+        await clearSession(chatId);
+        return;
+    }
+
+    const rows = managers.map((manager: any) => [
+        {
+            text: getUserDisplayName(manager).slice(0, 55),
+            callback_data: `task:manager:${manager._id.toString()}`,
+        },
+    ]);
+
+    rows.push([
+        {
+            text: 'بازگشت به انتخاب پروژه',
+            callback_data: 'task:back:projects',
+        },
+        {
+            text: 'انصراف',
+            callback_data: 'task:cancel',
+        },
+    ]);
+
+    await sendMessage(
+        chatId,
+        `پروژه انتخاب شد: <b>${escapeTelegramHtml(
+            getProjectTitle(project),
+        )}</b>\n\nمدیری که وظیفه باید برای او ثبت شود را انتخاب کنید:`,
+        buildInlineKeyboard(rows),
+    );
+};
+
+const handleManagerSelected = async (
+    chatId: string,
+    telegramUserId: string,
+    managerId: string,
+): Promise<void> => {
+    const actor = await ensureManagerActor(chatId, telegramUserId);
+    if (!actor) return;
+
+    if (!Types.ObjectId.isValid(managerId)) {
+        await sendMessage(chatId, 'شناسه مدیر معتبر نیست.');
+        await clearSession(chatId);
+        return;
+    }
+
+    const session = await TelegramTaskSession.findOne({
+        chatId,
+        actorUserId: actor._id,
+    } as any);
+
+    if (!session || !session.selectedProjectId) {
+        await sendMessage(
+            chatId,
+            'فرآیند ثبت وظیفه پیدا نشد. دوباره /task را ارسال کنید.',
+        );
+        await clearSession(chatId);
+        return;
+    }
+
+    const manager = await User.findOne({
+        _id: new Types.ObjectId(managerId),
+        role: ROLE_MANAGER,
+        isActive: true,
+    } as any);
+
+    if (!manager) {
+        await sendMessage(chatId, 'مدیر انتخاب‌شده پیدا نشد یا فعال نیست.');
+        await clearSession(chatId);
+        return;
+    }
+
+    await TelegramTaskSession.findOneAndUpdate(
+        {
+            chatId,
+            actorUserId: actor._id,
+        } as any,
+        {
+            step: 'enter_task',
+            selectedManagerId: manager._id,
+        },
+    );
+
+    await sendMessage(
+        chatId,
+        `مدیر انتخاب شد: <b>${escapeTelegramHtml(
+            getUserDisplayName(manager),
+        )}</b>\n\nمتن وظیفه را ارسال کنید.\n\nپیشنهاد:\nخط اول = عنوان وظیفه\nخط‌های بعدی = توضیحات`,
+        buildInlineKeyboard([
+            [
+                {
+                    text: 'انصراف',
+                    callback_data: 'task:cancel',
+                },
+            ],
+        ]),
+    );
+};
+
+const parseTaskText = (
+    text: string,
+): {
+    title: string;
+    description: string;
+} => {
+    const lines = text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+    const title = lines[0] || text.trim();
+    const description = lines.slice(1).join('\n').trim();
+
+    return {
+        title: title.slice(0, 180),
+        description,
+    };
+};
+
+const handleTaskText = async (
+    chatId: string,
+    telegramUserId: string,
+    text: string,
+): Promise<void> => {
+    const actor = await ensureManagerActor(chatId, telegramUserId);
+    if (!actor) return;
+
+    const session = await TelegramTaskSession.findOne({
+        chatId,
+        actorUserId: actor._id,
+    } as any);
+
+    if (
+        !session ||
+        session.step !== 'enter_task' ||
+        !session.selectedProjectId ||
+        !session.selectedManagerId
+    ) {
+        await sendMessage(chatId, 'برای ثبت وظیفه ابتدا /task را ارسال کنید.');
+        await clearSession(chatId);
+        return;
+    }
+
+    const parsed = parseTaskText(text);
+
+    if (!parsed.title || parsed.title.length < 3) {
+        await sendMessage(chatId, 'عنوان وظیفه باید حداقل ۳ کاراکتر باشد.');
+        return;
+    }
+
+    await TelegramTaskSession.findOneAndUpdate(
+        {
+            chatId,
+            actorUserId: actor._id,
+        } as any,
+        {
+            step: 'optional_file',
+            taskTitle: parsed.title,
+            taskDescription: parsed.description,
+        },
+    );
+
+    await sendMessage(
+        chatId,
+        `وظیفه ثبت موقت شد:\n<b>${escapeTelegramHtml(
+            parsed.title,
+        )}</b>\n\nاگر پیوست دارید، ویس، فایل، عکس یا ویدئو را ارسال کنید. اگر پیوست ندارید، روی «بدون پیوست» بزنید.`,
+        buildInlineKeyboard([
+            [
+                {
+                    text: 'بدون پیوست',
+                    callback_data: 'task:file:none',
+                },
+            ],
+            [
+                {
+                    text: 'انصراف',
+                    callback_data: 'task:cancel',
+                },
+            ],
+        ]),
+    );
+};
+
+const extensionFromMime = (mimeType: string): string => {
+    const map: Record<string, string> = {
+        'audio/ogg': '.ogg',
+        'audio/mpeg': '.mp3',
+        'audio/mp4': '.m4a',
+        'audio/x-m4a': '.m4a',
+        'image/jpeg': '.jpg',
+        'image/png': '.png',
+        'application/pdf': '.pdf',
+        'video/mp4': '.mp4',
+    };
+
+    return map[mimeType] || '';
+};
+
+const safeOriginalName = (value: string): string => {
+    const safe = String(value || '').replace(/[^a-zA-Z0-9.\-_]/g, '_');
+
+    return safe || 'telegram-file';
+};
+
+const originalNameFromFilePath = (
+    filePath: string,
+    fallback: string,
+): string => {
+    const name = path.basename(filePath || '').trim();
+
+    return safeOriginalName(name || fallback);
+};
+
+const fileLikeToAttachment = (
+    file: TelegramFileLike,
+    kind: TelegramAttachmentInput['kind'],
+    fallbackName: string,
+): TelegramAttachmentInput => {
+    const extension = extensionFromMime(file.mime_type || '');
+    const fallbackWithExtension = path.extname(fallbackName)
+        ? fallbackName
+        : `${fallbackName}${extension}`;
+
+    return {
+        fileId: file.file_id,
+        fileUniqueId: file.file_unique_id || '',
+        originalName: file.file_name || fallbackWithExtension,
+        fileType: file.mime_type || '',
+        fileSize: file.file_size || 0,
+        kind,
+    };
+};
+
+const getLargestPhoto = (
+    photos: TelegramPhotoSize[] | undefined,
+): TelegramPhotoSize | null => {
+    if (!photos?.length) return null;
+
+    return [...photos].sort((a, b) => (b.file_size || 0) - (a.file_size || 0))[0];
+};
+
+const getTelegramAttachment = (
+    message: TelegramMessage,
+): TelegramAttachmentInput | null => {
+    if (message.voice?.file_id) {
+        return fileLikeToAttachment(message.voice, 'voice', 'voice.ogg');
+    }
+
+    if (message.audio?.file_id) {
+        return fileLikeToAttachment(message.audio, 'audio', 'audio');
+    }
+
+    if (message.document?.file_id) {
+        return fileLikeToAttachment(message.document, 'document', 'document');
+    }
+
+    if (message.video?.file_id) {
+        return fileLikeToAttachment(message.video, 'video', 'video.mp4');
+    }
+
+    const photo = getLargestPhoto(message.photo);
+
+    if (photo?.file_id) {
+        return {
+            fileId: photo.file_id,
+            fileUniqueId: photo.file_unique_id || '',
+            originalName: 'photo.jpg',
+            fileType: 'image/jpeg',
+            fileSize: photo.file_size || 0,
+            kind: 'photo',
+        };
+    }
+
+    return null;
+};
+
+const downloadTelegramAttachment = async (
+    attachment: TelegramAttachmentInput,
+): Promise<DownloadedTelegramFile> => {
+    const telegramFile = await getTelegramFile(attachment.fileId);
+
+    if (!telegramFile.file_path) {
+        throw new Error('مسیر فایل از تلگرام دریافت نشد.');
+    }
+
+    const buffer = await downloadTelegramFile(telegramFile.file_path);
+
+    await fs.mkdir(uploadDir, {
+        recursive: true,
+    });
+
+    const originalName = originalNameFromFilePath(
+        telegramFile.file_path,
+        attachment.originalName,
+    );
+
+    const fileName = `${Date.now()}-${crypto.randomUUID()}-${originalName}`;
+    const filePath = path.join(uploadDir, fileName);
+
+    await fs.writeFile(filePath, buffer);
+
+    return {
+        fileName,
+        originalName: safeOriginalName(attachment.originalName || originalName),
+        fileUrl: `/api/v1/uploads/projects/${fileName}`,
+        fileType: attachment.fileType,
+        fileSize: attachment.fileSize || buffer.length,
+    };
+};
+
+const createTaskFromSession = async (
+    chatId: string,
+    actor: any,
+    fileMessage?: TelegramMessage,
+): Promise<void> => {
+    const session = await TelegramTaskSession.findOne({
+        chatId,
+        actorUserId: actor._id,
+    } as any);
+
+    if (
+        !session ||
+        session.step !== 'optional_file' ||
+        !session.selectedProjectId ||
+        !session.selectedManagerId ||
+        !session.taskTitle
+    ) {
+        await sendMessage(
+            chatId,
+            'اطلاعات وظیفه کامل نیست. دوباره /task را ارسال کنید.',
+        );
+        await clearSession(chatId);
+        return;
+    }
+
+    const project = await Project.findById(session.selectedProjectId);
+
+    if (!project) {
+        await sendMessage(chatId, 'پروژه انتخاب‌شده پیدا نشد.');
+        await clearSession(chatId);
+        return;
+    }
+
+    const manager = await User.findOne({
+        _id: session.selectedManagerId,
+        role: ROLE_MANAGER,
+        isActive: true,
+    } as any);
+
+    if (!manager) {
+        await sendMessage(chatId, 'مدیر انتخاب‌شده پیدا نشد یا فعال نیست.');
+        await clearSession(chatId);
+        return;
+    }
+
+    const task = await ProjectTask.create({
+        projectId: project._id,
+        title: session.taskTitle,
+        description: session.taskDescription || '',
+        assignedUserIds: [manager._id],
+        status: 'todo',
+        statusLabel: 'برای انجام',
+        priority: 'medium',
+        priorityLabel: 'متوسط',
+        startDate: new Date(),
+        dueDate: null,
+        completedAt: null,
+        createdBy: actor._id,
+        updatedBy: actor._id,
+        source: 'telegram_bot',
+        telegramChatId: chatId,
+        language: 'fa',
+        direction: 'rtl',
+    } as any);
+
+    const attachment = fileMessage ? getTelegramAttachment(fileMessage) : null;
+
+    if (attachment) {
+        const downloadedFile = await downloadTelegramAttachment(attachment);
+
+        await ProjectFile.create({
+            projectId: project._id,
+            taskId: task._id,
+            uploadedBy: actor._id,
+            fileName: downloadedFile.fileName,
+            originalName: downloadedFile.originalName,
+            fileUrl: downloadedFile.fileUrl,
+            fileType: downloadedFile.fileType || attachment.fileType,
+            fileSize: downloadedFile.fileSize || attachment.fileSize || 0,
+            category: TASK_ATTACHMENT_CATEGORY,
+            categoryLabel: TASK_ATTACHMENT_CATEGORY_LABEL,
+            source: 'telegram_bot',
+            telegramFileId: attachment.fileId,
+            telegramFileUniqueId: attachment.fileUniqueId || '',
+            telegramMessageId: fileMessage?.message_id || null,
+            telegramChatId: chatId,
+            language: 'fa',
+            direction: 'rtl',
+        } as any);
+    }
+
+    await clearSession(chatId);
+
+    await sendMessage(
+        chatId,
+        [
+            'وظیفه با موفقیت ثبت شد.',
+            '',
+            `پروژه: <b>${escapeTelegramHtml(getProjectTitle(project))}</b>`,
+            `مدیر مسئول: <b>${escapeTelegramHtml(getUserDisplayName(manager))}</b>`,
+            `وظیفه: <b>${escapeTelegramHtml(task.title)}</b>`,
+            attachment ? 'پیوست وظیفه ثبت شد.' : 'وظیفه بدون پیوست ثبت شد.',
+        ].join('\n'),
+        buildTaskHomeKeyboard(),
+    );
+};
+
+const handleOptionalFileMessage = async (
+    chatId: string,
+    telegramUserId: string,
+    message: TelegramMessage,
+): Promise<void> => {
+    const actor = await ensureManagerActor(chatId, telegramUserId);
+    if (!actor) return;
+
+    const attachment = getTelegramAttachment(message);
+
+    if (!attachment) {
+        await sendMessage(
+            chatId,
+            'در این مرحله فقط ویس، فایل، عکس، ویدئو یا گزینه «بدون پیوست» قابل قبول است.',
+            buildInlineKeyboard([
+                [
+                    {
+                        text: 'بدون پیوست',
+                        callback_data: 'task:file:none',
+                    },
+                ],
+                [
+                    {
+                        text: 'انصراف',
+                        callback_data: 'task:cancel',
+                    },
+                ],
+            ]),
+        );
+        return;
+    }
+
+    await createTaskFromSession(chatId, actor, message);
+};
+
+const handleCallbackQuery = async (
+    callbackQuery: TelegramCallbackQuery,
+): Promise<void> => {
+    const data = callbackQuery.data || '';
+    const chatId = getChatId(callbackQuery.message);
+    const telegramUserId = getTelegramUserId(undefined, callbackQuery);
+
+    if (!chatId) return;
+
+    await answerCallbackQuery(callbackQuery.id);
+
+    if (data === 'task:cancel') {
+        await clearSession(chatId);
+        await sendMessage(chatId, 'فرآیند ثبت وظیفه لغو شد.', buildTaskHomeKeyboard());
+        return;
+    }
+
+    if (data === 'task:home') {
+        await showTaskHome(chatId, telegramUserId);
+        return;
+    }
+
+    if (data === 'task:create' || data === 'task:back:projects') {
+        await startTaskFlow(chatId, telegramUserId);
+        return;
+    }
+
+    if (data === 'task:open_tasks') {
+        await listOpenTasks(chatId, telegramUserId);
+        return;
+    }
+
+    if (data.startsWith('task:project:')) {
+        const projectId = data.replace('task:project:', '');
+        await handleProjectSelected(chatId, telegramUserId, projectId);
+        return;
+    }
+
+    if (data.startsWith('task:manager:')) {
+        const managerId = data.replace('task:manager:', '');
+        await handleManagerSelected(chatId, telegramUserId, managerId);
+        return;
+    }
+
+    if (data === 'task:file:none') {
+        const actor = await ensureManagerActor(chatId, telegramUserId);
+        if (!actor) return;
+
+        await createTaskFromSession(chatId, actor);
+        return;
+    }
+
+    await sendMessage(chatId, 'دستور انتخاب‌شده معتبر نیست.', buildTaskHomeKeyboard());
 };
 
 const handleTextMessage = async (
-  message: TelegramMessage,
+    message: TelegramMessage,
 ): Promise<void> => {
-  const chatId = getChatId(message);
-  const telegramUserId = getTelegramUserId(message);
-  const text = String(message.text || '').trim();
+    const chatId = getChatId(message);
+    const telegramUserId = getTelegramUserId(message);
+    const text = String(message.text || '').trim();
 
-  if (!chatId) return;
+    if (!chatId) return;
 
-  if (text === '/cancel' || text === 'انصراف') {
-    await clearSession(chatId);
-    await sendMessage(chatId, 'فرآیند فعلی لغو شد.');
-    return;
-  }
-
-  if (text === '/start') {
-    const actor = await findActorByTelegram(telegramUserId, chatId);
-
-    if (actor) {
-      await User.findByIdAndUpdate(
-        actor._id,
-        {
-          telegramUserId,
-          telegramChatId: chatId,
-          telegramUsername: message.from?.username || actor.telegramUsername,
-        },
-        {
-          new: true,
-        },
-      );
-
-      await sendMessage(
-        chatId,
-        'بات به حساب شما متصل است.\nبرای ثبت وظیفه مدیریتی دستور /task را ارسال کنید.',
-      );
-      return;
+    if (text === '/cancel' || text === 'انصراف' || text === 'لغو عملیات') {
+        await clearSession(chatId);
+        await sendMessage(chatId, 'فرآیند فعلی لغو شد.', buildTaskHomeKeyboard());
+        return;
     }
 
-    await sendMessage(
-      chatId,
-      'برای استفاده از بات، ابتدا باید حساب تلگرام شما در پنل مدیریتی ثبت شده باشد.',
-    );
-    return;
-  }
+    if (
+        text === '/tasks' ||
+        text === '/mytasks' ||
+        text === 'وظایف باز من' ||
+        text === 'وظایف من' ||
+        text === 'کارهای باز من'
+    ) {
+        await listOpenTasks(chatId, telegramUserId);
+        return;
+    }
 
-  if (text === '/task' || text === 'ثبت وظیفه') {
-    await startTaskFlow(chatId, telegramUserId);
-    return;
-  }
+    if (
+        text === '/task' ||
+        text === '/newtask' ||
+        text === 'ثبت وظیفه' ||
+        text === 'تعریف وظیفه' ||
+        text === 'ثبت وظیفه برای مدیران'
+    ) {
+        await startTaskFlow(chatId, telegramUserId);
+        return;
+    }
 
-  const actor = await findActorByTelegram(telegramUserId, chatId);
+    const actor = await findActorByTelegram(telegramUserId, chatId);
 
-  if (!actor) {
-    await sendMessage(
-      chatId,
-      'حساب تلگرام شما به پنل متصل نیست. ابتدا اتصال کاربر به تلگرام را انجام دهید.',
-    );
-    return;
-  }
+    if (!actor) {
+        await sendMessage(
+            chatId,
+            'حساب تلگرام شما به پنل متصل نیست. ابتدا اتصال کاربر به تلگرام را انجام دهید.',
+        );
+        return;
+    }
 
-  const session = await TelegramTaskSession.findOne({
-    chatId,
-    actorUserId: actor._id,
-  } as any);
+    const session = await TelegramTaskSession.findOne({
+        chatId,
+        actorUserId: actor._id,
+    } as any);
 
-  if (!session) {
-    await sendMessage(
-      chatId,
-      'برای ثبت وظیفه دستور /task را ارسال کنید.',
-      buildInlineKeyboard([
-        [
-          {
-            text: 'ثبت وظیفه',
-            callback_data: 'task:back:projects',
-          },
-        ],
-      ]),
-    );
-    return;
-  }
+    if (!session) {
+        await sendMessage(
+            chatId,
+            'برای ثبت وظیفه از «ثبت وظیفه» و برای مشاهده وظایف انجام‌نشده از «وظایف باز من» استفاده کنید.',
+            buildTaskHomeKeyboard(),
+        );
+        return;
+    }
 
-  if (session.step === 'enter_task') {
-    await handleTaskText(chatId, telegramUserId, text);
-    return;
-  }
+    if (session.step === 'enter_task') {
+        await handleTaskText(chatId, telegramUserId, text);
+        return;
+    }
 
-  if (session.step === 'optional_file') {
-    await sendMessage(
-      chatId,
-      'در این مرحله فایل را ارسال کنید یا روی «بدون فایل» بزنید.',
-      buildInlineKeyboard([
-        [
-          {
-            text: 'بدون فایل',
-            callback_data: 'task:file:none',
-          },
-        ],
-        [
-          {
-            text: 'انصراف',
-            callback_data: 'task:cancel',
-          },
-        ],
-      ]),
-    );
-    return;
-  }
+    if (session.step === 'optional_file') {
+        if (text === '/skip' || text === 'بدون فایل' || text === 'بدون پیوست') {
+            await createTaskFromSession(chatId, actor);
+            return;
+        }
 
-  await sendMessage(chatId, 'لطفاً یکی از گزینه‌های نمایش داده‌شده را انتخاب کنید.');
+        await sendMessage(
+            chatId,
+            'در این مرحله ویس، فایل، عکس یا ویدئو را ارسال کنید یا روی «بدون پیوست» بزنید.',
+            buildInlineKeyboard([
+                [
+                    {
+                        text: 'بدون پیوست',
+                        callback_data: 'task:file:none',
+                    },
+                ],
+                [
+                    {
+                        text: 'انصراف',
+                        callback_data: 'task:cancel',
+                    },
+                ],
+            ]),
+        );
+        return;
+    }
+
+    await sendMessage(chatId, 'لطفاً یکی از گزینه‌های نمایش داده‌شده را انتخاب کنید.');
 };
 
-const handleFileMessage = async (
-  message: TelegramMessage,
+const handleAttachmentMessage = async (
+    message: TelegramMessage,
 ): Promise<void> => {
-  const chatId = getChatId(message);
-  const telegramUserId = getTelegramUserId(message);
+    const chatId = getChatId(message);
+    const telegramUserId = getTelegramUserId(message);
 
-  if (!chatId) return;
+    if (!chatId) return;
 
-  const actor = await findActorByTelegram(telegramUserId, chatId);
+    const actor = await findActorByTelegram(telegramUserId, chatId);
 
-  if (!actor) {
-    await sendMessage(chatId, 'حساب تلگرام شما به پنل متصل نیست.');
-    return;
-  }
+    if (!actor) {
+        await sendMessage(chatId, 'حساب تلگرام شما به پنل متصل نیست.');
+        return;
+    }
 
-  const session = await TelegramTaskSession.findOne({
-    chatId,
-    actorUserId: actor._id,
-  } as any);
+    const session = await TelegramTaskSession.findOne({
+        chatId,
+        actorUserId: actor._id,
+    } as any);
 
-  if (!session || session.step !== 'optional_file') {
-    await sendMessage(
-      chatId,
-      'برای ثبت فایل وظیفه ابتدا دستور /task را ارسال کنید.',
+    if (!session || session.step !== 'optional_file') {
+        await sendMessage(
+            chatId,
+            'برای ثبت پیوست وظیفه ابتدا دستور /task را ارسال کنید.',
+            buildTaskHomeKeyboard(),
+        );
+        return;
+    }
+
+    await handleOptionalFileMessage(chatId, telegramUserId, message);
+};
+
+const messageHasAttachment = (message: TelegramMessage): boolean => {
+    return Boolean(
+        message.voice ||
+            message.audio ||
+            message.document ||
+            message.video ||
+            message.photo?.length,
     );
-    return;
-  }
-
-  await handleOptionalFileMessage(chatId, telegramUserId, message);
 };
 
 export const telegramTaskBotService = {
-  async handleUpdate(update: TelegramUpdate): Promise<void> {
-    if (update.callback_query) {
-      await handleCallbackQuery(update.callback_query);
-      return;
-    }
+    async handleUpdate(update: TelegramUpdate): Promise<void> {
+        if (update.callback_query) {
+            await handleCallbackQuery(update.callback_query);
+            return;
+        }
 
-    if (!update.message) return;
+        if (!update.message) return;
 
-    if (update.message.document || update.message.photo?.length) {
-      await handleFileMessage(update.message);
-      return;
-    }
+        if (messageHasAttachment(update.message)) {
+            await handleAttachmentMessage(update.message);
+            return;
+        }
 
-    if (update.message.text) {
-      await handleTextMessage(update.message);
-    }
-  },
+        if (update.message.text) {
+            await handleTextMessage(update.message);
+        }
+    },
 };

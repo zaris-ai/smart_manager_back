@@ -8,6 +8,11 @@ type TelegramMessage = {
     chat?: {
         id?: number | string;
     };
+    voice?: unknown;
+    audio?: unknown;
+    document?: unknown;
+    video?: unknown;
+    photo?: unknown[];
 };
 
 type TelegramCallbackQuery = {
@@ -22,11 +27,16 @@ type TelegramUpdate = {
 
 const TASK_TEXT_COMMANDS = new Set([
     '/task',
-    '/tasks',
     '/newtask',
     'ثبت وظیفه',
     'تعریف وظیفه',
     'ثبت وظیفه برای مدیران',
+
+    '/tasks',
+    '/mytasks',
+    'وظایف باز من',
+    'وظایف من',
+    'کارهای باز من',
 ]);
 
 const getChatIdFromUpdate = (update: TelegramUpdate): string => {
@@ -42,6 +52,16 @@ const getTextFromUpdate = (update: TelegramUpdate): string => {
 
 const getCallbackDataFromUpdate = (update: TelegramUpdate): string => {
     return String(update.callback_query?.data || '').trim();
+};
+
+const messageHasAttachment = (message?: TelegramMessage): boolean => {
+    return Boolean(
+        message?.voice ||
+            message?.audio ||
+            message?.document ||
+            message?.video ||
+            message?.photo?.length,
+    );
 };
 
 const hasActiveTaskSession = async (chatId: string): Promise<boolean> => {
@@ -65,6 +85,10 @@ const isTaskUpdate = async (update: TelegramUpdate): Promise<boolean> => {
 
     if (callbackData.startsWith('task:')) {
         return true;
+    }
+
+    if (messageHasAttachment(update.message)) {
+        return hasActiveTaskSession(chatId);
     }
 
     return hasActiveTaskSession(chatId);
@@ -111,12 +135,12 @@ export const telegramWebhook = async (
 
         /*
           Preserve previous bot features.
-    
-          The old controller expects the secret in req.params.secret because
-          the old webhook route was /telegram/webhook/:secret.
-    
-          The new Telegram webhook uses x-telegram-bot-api-secret-token header,
-          so we inject the configured secret into req.params before delegating.
+
+          The old controller expects req.params.secret because the old route was:
+          /telegram/webhook/:secret
+
+          The new Telegram webhook uses x-telegram-bot-api-secret-token.
+          We inject the configured secret before delegating to the old handler.
         */
         (req.params as any).secret = configuredSecret;
 
