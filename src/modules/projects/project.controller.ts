@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import mongoose, { Types } from 'mongoose';
+import User, { UserRole } from '../users/user.model';
 import {
   Project,
   ProjectCalendarEventType,
@@ -19,6 +20,7 @@ import {
 type AppRole = 'manager' | 'employee';
 
 type AuthRequest = Request & {
+  file?: Express.Multer.File;
   user?: {
     id?: string;
     _id?: string;
@@ -169,11 +171,61 @@ const populateTaskQuery = (query: any) => {
 };
 
 const populateNoteQuery = (query: any) => {
-  return query.populate('authorId', USER_SELECT);
+  return query
+    .populate('authorId', USER_SELECT)
+    .populate('registeredById', USER_SELECT);
 };
 
 const populateFileQuery = (query: any) => {
-  return query.populate('uploadedBy', USER_SELECT);
+  return query
+    .populate('uploadedBy', USER_SELECT)
+    .populate('progressNoteId', 'note progressPercent statusSnapshot source createdAt');
+};
+
+const serializeDocument = (document: any): any => {
+  return document?.toObject ? document.toObject() : document;
+};
+
+const attachFilesToNotes = async (notes: any[]) => {
+  const noteObjects = notes.map(serializeDocument);
+  const noteIds = noteObjects
+    .map((note) => note?._id)
+    .filter(Boolean)
+    .map((noteId) => String(noteId));
+
+  if (!noteIds.length) return noteObjects;
+
+  const files = await populateFileQuery(
+    ProjectFile.find({
+      progressNoteId: { $in: noteIds.map(toObjectId) },
+    }).sort({ createdAt: -1 }),
+  );
+
+  const groupedFiles = (files as any[]).reduce((acc: Record<string, any[]>, file: any) => {
+    const fileObject = serializeDocument(file);
+    const progressNoteId = fileObject.progressNoteId;
+    const noteId =
+      typeof progressNoteId === 'object' && progressNoteId?._id
+        ? String(progressNoteId._id)
+        : String(progressNoteId || '');
+
+    if (!noteId) return acc;
+
+    acc[noteId] = acc[noteId] || [];
+    acc[noteId].push(fileObject);
+
+    return acc;
+  }, {} as Record<string, any[]>);
+
+  return noteObjects.map((note) => {
+    const noteFiles = groupedFiles[String(note._id)] || [];
+
+    return {
+      ...note,
+      files: noteFiles,
+      attachmentCount: noteFiles.length,
+    };
+  });
 };
 
 const getEmployeeProjectFilter = (req: AuthRequest): Record<string, unknown> => {
@@ -210,6 +262,79 @@ const employeeHasTaskAccess = (req: AuthRequest, task: any): boolean => {
   return task.assignedUserIds?.some((userId: Types.ObjectId) => {
     return String(userId) === authUserId;
   });
+};
+
+
+const resolveProjectNoteAuthorId = async (
+  req: AuthRequest,
+  _project: any,
+  requestedAuthorId: unknown,
+): Promise<Types.ObjectId> => {
+  const authUserId = getAuthUserId(req);
+
+  if (!isValidObjectId(authUserId)) {
+    throw new Error('شناسه کاربر جاری معتبر نیست.');
+  }
+
+  const targetAuthorId =
+    typeof requestedAuthorId === 'string' && requestedAuthorId.trim()
+      ? requestedAuthorId.trim()
+      : authUserId;
+
+  if (!isValidObjectId(targetAuthorId)) {
+    throw new Error('شناسه مدیر انجام‌دهنده معتبر نیست.');
+  }
+
+  const managerUser = await User.findOne({
+    _id: targetAuthorId,
+    role: UserRole.MANAGER,
+    isActive: true,
+  }).select('_id role isActive');
+
+  if (!managerUser) {
+    throw new Error('مدیر انتخاب‌شده معتبر یا فعال نیست.');
+  }
+
+  return managerUser._id as Types.ObjectId;
+};
+
+const resolveManagerTaskAssigneeIds = async (
+  req: AuthRequest,
+  requestedAssignedUserIds: unknown,
+): Promise<Types.ObjectId[]> => {
+  const authUserId = getAuthUserId(req);
+
+  if (!isValidObjectId(authUserId)) {
+    throw new Error('شناسه کاربر جاری معتبر نیست.');
+  }
+
+  const rawIds = Array.isArray(requestedAssignedUserIds)
+    ? requestedAssignedUserIds
+    : [];
+
+  const uniqueIds = Array.from(
+    new Set(
+      rawIds
+        .filter((item) => typeof item === 'string' && isValidObjectId(item))
+        .map((item) => String(item)),
+    ),
+  );
+
+  if (!uniqueIds.length) {
+    uniqueIds.push(authUserId);
+  }
+
+  const managers = await User.find({
+    _id: { $in: uniqueIds.map(toObjectId) },
+    role: UserRole.MANAGER,
+    isActive: true,
+  }).select('_id role isActive');
+
+  if (managers.length !== uniqueIds.length) {
+    throw new Error('همه مسئولان انتخاب‌شده باید مدیر فعال باشند.');
+  }
+
+  return managers.map((manager) => manager._id as Types.ObjectId);
 };
 
 export const listProjects = async (req: AuthRequest, res: Response) => {
@@ -682,6 +807,22 @@ export const createProjectTask = async (req: AuthRequest, res: Response) => {
     return sendValidationError(res, 'عنوان وظیفه الزامی است.');
   }
 
+  let resolvedAssignedUserIds: Types.ObjectId[];
+
+  try {
+    resolvedAssignedUserIds = await resolveManagerTaskAssigneeIds(
+      req,
+      assignedUserIds,
+    );
+  } catch (error) {
+    return sendValidationError(
+      res,
+      error instanceof Error
+        ? error.message
+        : 'مسئولان انتخاب‌شده برای وظیفه معتبر نیستند.',
+    );
+  }
+
   const normalizedStatus =
     normalizeEnumValue(status, ProjectTaskStatus) || ProjectTaskStatus.TODO;
 
@@ -702,7 +843,7 @@ export const createProjectTask = async (req: AuthRequest, res: Response) => {
     projectId: toObjectId(id),
     title: title.trim(),
     description: typeof description === 'string' ? description.trim() : '',
-    assignedUserIds: normalizeObjectIdArray(assignedUserIds),
+    assignedUserIds: resolvedAssignedUserIds,
     status: normalizedStatus,
     statusLabel: PROJECT_TASK_STATUS_LABELS[normalizedStatus],
     priority: normalizedPriority,
@@ -786,7 +927,19 @@ export const updateProjectTask = async (req: AuthRequest, res: Response) => {
     }
 
     if ('assignedUserIds' in req.body) {
-      update.assignedUserIds = normalizeObjectIdArray(req.body.assignedUserIds);
+      try {
+        update.assignedUserIds = await resolveManagerTaskAssigneeIds(
+          req,
+          req.body.assignedUserIds,
+        );
+      } catch (error) {
+        return sendValidationError(
+          res,
+          error instanceof Error
+            ? error.message
+            : 'مسئولان انتخاب‌شده برای وظیفه معتبر نیستند.',
+        );
+      }
     }
   }
 
@@ -866,8 +1019,15 @@ export const listProjectNotes = async (req: AuthRequest, res: Response) => {
     ProjectProgressNote.find({ projectId: id }).sort({ createdAt: -1 }),
   );
 
-  return sendSuccess(res, notes, 'یادداشت‌های پروژه با موفقیت دریافت شد.');
+  const notesWithFiles = await attachFilesToNotes(notes);
+
+  return sendSuccess(
+    res,
+    notesWithFiles,
+    'یادداشت‌های پروژه با موفقیت دریافت شد.',
+  );
 };
+
 
 export const createProjectNote = async (req: AuthRequest, res: Response) => {
   if (!isManager(req)) return sendForbidden(res);
@@ -889,10 +1049,23 @@ export const createProjectNote = async (req: AuthRequest, res: Response) => {
     return sendNotFound(res, 'پروژه پیدا نشد.');
   }
 
-  const { note, progressPercent, statusSnapshot } = req.body;
+  const { note, progressPercent, statusSnapshot, authorId } = req.body;
 
   if (!note || typeof note !== 'string' || !note.trim()) {
-    return sendValidationError(res, 'متن یادداشت الزامی است.');
+    return sendValidationError(res, 'متن گزارش کار الزامی است.');
+  }
+
+  let noteAuthorId: Types.ObjectId;
+
+  try {
+    noteAuthorId = await resolveProjectNoteAuthorId(req, project, authorId);
+  } catch (error) {
+    return sendValidationError(
+      res,
+      error instanceof Error
+        ? error.message
+        : 'مدیر انجام‌دهنده گزارش معتبر نیست.',
+    );
   }
 
   const parsedProgressPercent =
@@ -916,19 +1089,48 @@ export const createProjectNote = async (req: AuthRequest, res: Response) => {
 
   const noteDocument = await ProjectProgressNote.create({
     projectId: toObjectId(id),
-    authorId: toObjectId(authUserId),
+    authorId: noteAuthorId,
+    registeredById: toObjectId(authUserId),
     note: note.trim(),
     progressPercent: parsedProgressPercent,
     statusSnapshot: normalizedSnapshot,
     language: 'fa',
     direction: 'rtl',
+    source: 'web',
   });
+
+  if (req.file) {
+    await ProjectFile.create({
+      projectId: toObjectId(id),
+      progressNoteId: noteDocument._id,
+      uploadedBy: toObjectId(authUserId),
+      fileName: req.file.filename,
+      originalName: req.file.originalname,
+      fileUrl: `/api/v1/uploads/projects/${req.file.filename}`,
+      fileType: req.file.mimetype,
+      fileSize: req.file.size,
+      category: ProjectFileCategory.REPORTS,
+      categoryLabel: PROJECT_FILE_CATEGORY_LABELS[ProjectFileCategory.REPORTS],
+      language: 'fa',
+      direction: 'rtl',
+      source: 'web',
+    });
+  }
 
   const populatedNote = await populateNoteQuery(
     ProjectProgressNote.findById(noteDocument._id),
   );
 
-  return sendSuccess(res, populatedNote, 'یادداشت پروژه با موفقیت ثبت شد.', 201);
+  const [noteWithFiles] = await attachFilesToNotes(
+    populatedNote ? [populatedNote] : [],
+  );
+
+  return sendSuccess(
+    res,
+    noteWithFiles,
+    'گزارش کار با موفقیت ثبت شد.',
+    201,
+  );
 };
 
 export const listProjectFiles = async (req: AuthRequest, res: Response) => {
@@ -948,8 +1150,16 @@ export const listProjectFiles = async (req: AuthRequest, res: Response) => {
     return sendForbidden(res);
   }
 
+  const standaloneOnly = String(req.query.standaloneOnly || '').toLowerCase() === 'true';
+
+  const filter: Record<string, unknown> = { projectId: id };
+
+  if (standaloneOnly) {
+    filter.$or = [{ progressNoteId: null }, { progressNoteId: { $exists: false } }];
+  }
+
   const files = await populateFileQuery(
-    ProjectFile.find({ projectId: id }).sort({ createdAt: -1 }),
+    ProjectFile.find(filter).sort({ createdAt: -1 }),
   );
 
   return sendSuccess(res, files, 'فایل‌های پروژه با موفقیت دریافت شد.');
@@ -983,8 +1193,31 @@ export const uploadProjectFile = async (req: AuthRequest, res: Response) => {
     normalizeEnumValue(req.body.category, ProjectFileCategory) ||
     ProjectFileCategory.OTHER;
 
+  const rawProgressNoteId =
+    typeof req.body.progressNoteId === 'string' ? req.body.progressNoteId.trim() : '';
+
+  let progressNoteObjectId: Types.ObjectId | null = null;
+
+  if (rawProgressNoteId) {
+    if (!isValidObjectId(rawProgressNoteId)) {
+      return sendValidationError(res, 'گزارش انتخاب‌شده برای این پروژه معتبر نیست.');
+    }
+
+    const progressNote = await ProjectProgressNote.findOne({
+      _id: rawProgressNoteId,
+      projectId: id,
+    });
+
+    if (!progressNote) {
+      return sendValidationError(res, 'گزارش انتخاب‌شده برای این پروژه معتبر نیست.');
+    }
+
+    progressNoteObjectId = toObjectId(rawProgressNoteId);
+  }
+
   const file = await ProjectFile.create({
     projectId: toObjectId(id),
+    progressNoteId: progressNoteObjectId,
     uploadedBy: toObjectId(authUserId),
     fileName: req.file.filename,
     originalName: req.file.originalname,
@@ -1075,8 +1308,8 @@ export const getCalendarEvents = async (req: AuthRequest, res: Response) => {
   }
 
   const [projects, tasks] = await Promise.all([
-    Project.find(projectFilter),
-    ProjectTask.find(taskFilter),
+    Project.find(projectFilter).populate('assignedUserIds', USER_SELECT),
+    ProjectTask.find(taskFilter).populate('assignedUserIds', USER_SELECT),
   ]);
 
   const events = [

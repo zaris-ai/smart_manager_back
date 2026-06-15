@@ -354,6 +354,7 @@ const saveTelegramMediaAsProjectFile = async (
     media: MediaCandidate,
     projectId: Types.ObjectId,
     uploadedBy: Types.ObjectId,
+    progressNoteId?: Types.ObjectId | null,
 ) => {
     const telegramFile = await getTelegramFile(media.fileId);
 
@@ -375,6 +376,7 @@ const saveTelegramMediaAsProjectFile = async (
 
     return ProjectFile.create({
         projectId,
+        progressNoteId: progressNoteId || null,
         uploadedBy,
         fileName,
         originalName: safeOriginalName(media.originalName || originalName),
@@ -403,6 +405,7 @@ const createTelegramProjectNote = async (
     return ProjectProgressNote.create({
         projectId,
         authorId: user._id,
+        registeredById: user._id,
         note: description.trim(),
         progressPercent: null,
         statusSnapshot: project?.status || 'telegram_bot',
@@ -443,6 +446,7 @@ const completeAttachmentStep = async (
             media,
             session.selectedProjectId,
             user._id,
+            session.lastProjectNoteId || null,
         );
     }
 

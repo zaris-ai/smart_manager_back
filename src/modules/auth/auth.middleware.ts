@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import { TokenExpiredError } from 'jsonwebtoken';
 import { verifyAccessToken } from './auth.token';
 
 export type AuthUser = {
@@ -18,7 +19,6 @@ export const requireAuth = (
   next: NextFunction,
 ): void => {
   const authorizationHeader = req.headers.authorization || '';
-
   const [scheme, token] = authorizationHeader.split(' ');
 
   if (scheme !== 'Bearer' || !token) {
@@ -41,11 +41,15 @@ export const requireAuth = (
     };
 
     next();
-  } catch {
+  } catch (error) {
+    const isExpired = error instanceof TokenExpiredError;
+
     res.status(401).json({
       success: false,
-      message: 'توکن دسترسی معتبر نیست یا منقضی شده است.',
-      code: 'INVALID_ACCESS_TOKEN',
+      message: isExpired
+        ? 'توکن دسترسی منقضی شده است.'
+        : 'توکن دسترسی معتبر نیست.',
+      code: isExpired ? 'ACCESS_TOKEN_EXPIRED' : 'INVALID_ACCESS_TOKEN',
     });
   }
 };

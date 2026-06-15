@@ -29,6 +29,15 @@ type TrendItem = {
     completedTasks: number;
 };
 
+type RecentActivityFile = {
+    id: string;
+    originalName: string;
+    fileUrl: string;
+    fileType: string;
+    fileSize: number;
+    categoryLabel: string;
+};
+
 type RecentActivity = {
     id: string;
     type: 'project' | 'task' | 'note' | 'file';
@@ -36,6 +45,7 @@ type RecentActivity = {
     description: string;
     date: string;
     projectId?: string;
+    files?: RecentActivityFile[];
 };
 
 export type DashboardSummary = {
@@ -210,7 +220,7 @@ const buildRecentActivities = async (
     noteFilter: Record<string, unknown>,
     fileFilter: Record<string, unknown>,
 ): Promise<RecentActivity[]> => {
-    const [projects, tasks, notes, files] = await Promise.all([
+    const [projects, tasks, notes, standaloneFiles] = await Promise.all([
         Project.find(projectFilter as any)
             .sort({ createdAt: -1 })
             .limit(5)
@@ -229,13 +239,47 @@ const buildRecentActivities = async (
             .limit(5)
             .lean(),
 
-        ProjectFile.find(fileFilter as any)
+        ProjectFile.find({
+            ...(fileFilter as any),
+            $or: [{ progressNoteId: null }, { progressNoteId: { $exists: false } }],
+        })
             .populate('projectId', 'title')
             .populate('uploadedBy', 'firstName lastName fullName username')
             .sort({ createdAt: -1 })
             .limit(5)
             .lean(),
     ]);
+
+    const noteIds = notes.map((note: any) => note._id).filter(Boolean);
+
+    const linkedFiles = noteIds.length
+        ? await ProjectFile.find({
+            progressNoteId: { $in: noteIds },
+        })
+            .sort({ createdAt: -1 })
+            .lean()
+        : [];
+
+    const filesByNoteId = linkedFiles.reduce<Record<string, RecentActivityFile[]>>(
+        (acc, file: any) => {
+            const noteId = String(file.progressNoteId || '');
+
+            if (!noteId) return acc;
+
+            acc[noteId] = acc[noteId] || [];
+            acc[noteId].push({
+                id: String(file._id),
+                originalName: file.originalName,
+                fileUrl: file.fileUrl,
+                fileType: file.fileType || '',
+                fileSize: file.fileSize || 0,
+                categoryLabel: file.categoryLabel || 'گزارش‌ها',
+            });
+
+            return acc;
+        },
+        {},
+    );
 
     const projectActivities: RecentActivity[] = projects.map((project: any) => ({
         id: String(project._id),
@@ -265,9 +309,10 @@ const buildRecentActivities = async (
         description: trimText(note.note, 140) || 'گزارش کار جدید ثبت شد.',
         date: new Date(note.createdAt).toISOString(),
         projectId: note.projectId?._id ? String(note.projectId._id) : undefined,
+        files: filesByNoteId[String(note._id)] || [],
     }));
 
-    const fileActivities: RecentActivity[] = files.map((file: any) => ({
+    const fileActivities: RecentActivity[] = standaloneFiles.map((file: any) => ({
         id: String(file._id),
         type: 'file',
         title: `فایل جدید: ${file.originalName}`,

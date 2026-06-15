@@ -31,11 +31,8 @@ const accessSecret: Secret = process.env.JWT_ACCESS_SECRET || 'dev-access-secret
 const refreshSecret: Secret =
   process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret';
 
-const accessTokenExpiresIn =
-  process.env.JWT_ACCESS_EXPIRES_IN || '15m';
-
-const refreshTokenExpiresIn =
-  process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+const accessTokenExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
+const refreshTokenExpiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 
 const accessTokenSignOptions: SignOptions = {
   expiresIn: accessTokenExpiresIn as SignOptions['expiresIn'],
@@ -144,6 +141,19 @@ export const createTokenPair = async (
 
   return {
     accessToken,
+    refreshToken,
+    tokenType: 'Bearer',
+    accessTokenExpiresIn,
+    refreshTokenExpiresIn,
+  };
+};
+
+export const createAccessTokenWithExistingRefreshToken = (
+  user: UserDocument,
+  refreshToken: string,
+): AuthTokenPair => {
+  return {
+    accessToken: signAccessToken(user),
     refreshToken,
     tokenType: 'Bearer',
     accessTokenExpiresIn,

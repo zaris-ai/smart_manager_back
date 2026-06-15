@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import AuthRefreshToken from './auth.model';
 import {
+  createAccessTokenWithExistingRefreshToken,
   createTokenPair,
   hashToken,
   revokeRefreshToken,
@@ -29,11 +30,23 @@ const sendValidationError = (res: Response, message: string): void => {
   });
 };
 
-const sendUnauthorized = (res: Response, message: string): void => {
+const sendUnauthorized = (
+  res: Response,
+  message: string,
+  code = 'UNAUTHORIZED',
+): void => {
   res.status(401).json({
     success: false,
     message,
-    code: 'UNAUTHORIZED',
+    code,
+  });
+};
+
+const sendInvalidRefreshToken = (res: Response): void => {
+  res.status(401).json({
+    success: false,
+    message: 'توکن تمدید معتبر نیست یا منقضی شده است.',
+    code: 'INVALID_REFRESH_TOKEN',
   });
 };
 
@@ -97,55 +110,73 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 };
 
 export const refresh = async (req: Request, res: Response): Promise<void> => {
-  const { refreshToken } = req.body;
+  const { refreshToken } = req.body || {};
 
   if (!refreshToken || typeof refreshToken !== 'string') {
-    sendValidationError(res, 'توکن تمدید الزامی است.');
+    res.status(401).json({
+      success: false,
+      message: 'توکن تمدید الزامی است.',
+      code: 'REFRESH_TOKEN_REQUIRED',
+    });
     return;
   }
 
+  let payload: {
+    id: string;
+    username?: string;
+    role?: string;
+  };
+
   try {
-    const payload = verifyRefreshToken(refreshToken);
-
-    const storedToken = await AuthRefreshToken.findOne({
-      userId: payload.id,
-      refreshTokenHash: hashToken(refreshToken),
-      revokedAt: null,
-      expiresAt: {
-        $gt: new Date(),
-      },
-    });
-
-    if (!storedToken) {
-      sendUnauthorized(res, 'توکن تمدید معتبر نیست یا منقضی شده است.');
-      return;
-    }
-
-    const user = await User.findById(payload.id).select(
-      `+passwordHash ${SAFE_USER_SELECT}`,
-    );
-
-    if (!user || user.status !== UserStatus.ACTIVE || !user.isActive) {
-      sendUnauthorized(res, 'حساب کاربری فعال نیست.');
-      return;
-    }
-
-    storedToken.revokedAt = new Date();
-    await storedToken.save();
-
-    const tokens = await createTokenPair(user, req);
-
-    res.json({
-      success: true,
-      message: 'توکن با موفقیت تمدید شد.',
-      data: {
-        user: toSafeUser(user),
-        tokens,
-      },
-    });
+    payload = verifyRefreshToken(refreshToken);
   } catch {
-    sendUnauthorized(res, 'توکن تمدید معتبر نیست یا منقضی شده است.');
+    sendInvalidRefreshToken(res);
+    return;
   }
+
+  const refreshTokenHash = hashToken(refreshToken);
+
+  const storedToken = await AuthRefreshToken.findOne({
+    userId: payload.id,
+    refreshTokenHash,
+    revokedAt: null,
+    expiresAt: {
+      $gt: new Date(),
+    },
+  });
+
+  if (!storedToken) {
+    sendInvalidRefreshToken(res);
+    return;
+  }
+
+  const user = await User.findById(payload.id).select(
+    `+passwordHash ${SAFE_USER_SELECT}`,
+  );
+
+  if (!user || user.status !== UserStatus.ACTIVE || !user.isActive) {
+    sendInvalidRefreshToken(res);
+    return;
+  }
+
+  /*
+    IMPORTANT:
+    Do not revoke and rotate refresh token on every refresh request.
+
+    NextAuth may call refresh more than once during SSR/client refetch.
+    If the first request revokes the refresh token, the second request fails,
+    then frontend session becomes invalid and causes dashboard/login loop.
+  */
+  const tokens = createAccessTokenWithExistingRefreshToken(user, refreshToken);
+
+  res.json({
+    success: true,
+    message: 'توکن با موفقیت تمدید شد.',
+    data: {
+      user: toSafeUser(user),
+      tokens,
+    },
+  });
 };
 
 export const logout = async (req: Request, res: Response): Promise<void> => {

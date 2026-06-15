@@ -24,6 +24,10 @@ import {
 } from '@/modules/projects/project.controller';
 import { importProjectsFromExcel } from '@/modules/projects/project-import.controller';
 
+import { projectTaskController } from './project-task.controller';
+import { projectUpload } from './project-upload.middleware';
+
+
 type AsyncController = (
   req: Request,
   res: Response,
@@ -135,7 +139,11 @@ router.delete('/:id/tasks/:taskId', routeHandler(archiveProjectTask));
  * Project notes
  */
 router.get('/:id/notes', routeHandler(listProjectNotes));
-router.post('/:id/notes', routeHandler(createProjectNote));
+router.post(
+  '/:id/notes',
+  projectFileUpload.single('file'),
+  routeHandler(createProjectNote),
+);
 
 /**
  * Project files
@@ -147,5 +155,20 @@ router.post(
   routeHandler(createProjectFile),
 );
 router.delete('/:id/files/:fileId', routeHandler(deleteProjectFile));
+
+
+router.get('/:projectId/tasks', projectTaskController.listTasks);
+
+router.post('/:projectId/tasks', projectTaskController.createTask);
+
+router.patch('/:projectId/tasks/:taskId', projectTaskController.updateTask);
+
+router.post(
+  '/:projectId/tasks/:taskId/files',
+  projectUpload.array('files', 20),
+  projectTaskController.uploadTaskFiles,
+);
+
+router.delete('/:projectId/tasks/:taskId', projectTaskController.deleteTask);
 
 export default router;

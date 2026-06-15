@@ -115,6 +115,7 @@ export interface ProjectTaskDocument extends Document {
 export interface ProjectProgressNoteDocument extends Document {
   projectId: Types.ObjectId;
   authorId: Types.ObjectId;
+  registeredById?: Types.ObjectId | null;
   note: string;
   progressPercent: number | null;
   statusSnapshot: ProjectStatus | string;
@@ -129,6 +130,7 @@ export interface ProjectProgressNoteDocument extends Document {
 
 export interface ProjectFileDocument extends Document {
   projectId: Types.ObjectId;
+  progressNoteId?: Types.ObjectId | null;
   uploadedBy: Types.ObjectId;
   fileName: string;
   originalName: string;
@@ -334,6 +336,12 @@ const projectProgressNoteSchema =
         required: true,
         index: true,
       },
+      registeredById: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+        index: true,
+      },
       note: {
         type: String,
         required: true,
@@ -389,6 +397,12 @@ const projectFileSchema = new mongoose.Schema<ProjectFileDocument>(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Project',
       required: true,
+      index: true,
+    },
+    progressNoteId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ProjectProgressNote',
+      default: null,
       index: true,
     },
     uploadedBy: {
@@ -478,6 +492,7 @@ projectTaskSchema.index({ dueDate: 1, status: 1 });
 
 projectProgressNoteSchema.index({ projectId: 1, source: 1, createdAt: -1 });
 projectFileSchema.index({ projectId: 1, source: 1, createdAt: -1 });
+projectFileSchema.index({ projectId: 1, progressNoteId: 1, createdAt: -1 });
 
 export const Project =
   (mongoose.models.Project as Model<ProjectDocument>) ||
