@@ -54,7 +54,7 @@ const getCallbackDataFromUpdate = (update: TelegramUpdate): string => {
     return String(update.callback_query?.data || '').trim();
 };
 
-const messageHasAttachment = (message?: TelegramMessage): boolean => {
+const messageHasTaskAttachment = (message?: TelegramMessage): boolean => {
     return Boolean(
         message?.voice ||
             message?.audio ||
@@ -87,7 +87,16 @@ const isTaskUpdate = async (update: TelegramUpdate): Promise<boolean> => {
         return true;
     }
 
-    if (messageHasAttachment(update.message)) {
+    /*
+      Critical for recorded Telegram audio:
+
+      A recorded Telegram voice message arrives as:
+      update.message.voice
+
+      It has no text. Therefore, it must be routed by active task session.
+      Without this branch, the voice goes to the old report bot or is ignored.
+    */
+    if (messageHasTaskAttachment(update.message)) {
         return hasActiveTaskSession(chatId);
     }
 
