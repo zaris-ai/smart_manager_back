@@ -7,9 +7,25 @@ export type TelegramInlineKeyboardMarkup = {
     inline_keyboard: TelegramInlineKeyboardButton[][];
 };
 
+export type TelegramReplyKeyboardButton = {
+    text: string;
+};
+
+export type TelegramReplyKeyboardMarkup = {
+    keyboard: Array<Array<TelegramReplyKeyboardButton | string>>;
+    resize_keyboard?: boolean;
+    one_time_keyboard?: boolean;
+    is_persistent?: boolean;
+    selective?: boolean;
+};
+
+export type TelegramReplyMarkup =
+    | TelegramInlineKeyboardMarkup
+    | TelegramReplyKeyboardMarkup;
+
 export type TelegramSendMessageOptions = {
     parseMode?: 'HTML' | 'MarkdownV2';
-    replyMarkup?: TelegramInlineKeyboardMarkup;
+    replyMarkup?: TelegramReplyMarkup;
     disableWebPagePreview?: boolean;
 };
 

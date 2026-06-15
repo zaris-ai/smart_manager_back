@@ -91,10 +91,43 @@ const getLinkedUser = async (
 const buildMainKeyboard = () => ({
     inline_keyboard: [
         [{ text: 'ثبت گزارش پروژه', callback_data: 'bot:add_report' }],
+        [{ text: 'ثبت وظیفه برای مدیران', callback_data: 'task:back:projects' }],
         [{ text: 'فهرست پروژه‌های من', callback_data: 'bot:list_projects' }],
         [{ text: 'لغو عملیات جاری', callback_data: 'bot:cancel' }],
     ],
 });
+
+const buildDefaultReplyKeyboard = () => ({
+    keyboard: [
+        [{ text: 'شروع / راهنما' }, { text: 'ثبت وظیفه' }],
+        [{ text: 'ثبت گزارش پروژه' }, { text: 'پروژه‌های من' }],
+        [{ text: 'لغو عملیات' }],
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+    is_persistent: true,
+});
+
+const buildBotGuideText = (user: BotUser): string => {
+    return [
+        `سلام ${escapeTelegramHtml(user.fullName || user.username)}.`,
+        '',
+        'راهنمای ربات مدیریتی آوید:',
+        '',
+        'با دکمه «ثبت گزارش پروژه» می‌توانید برای پروژه‌های خود گزارش، توضیح، فایل، عکس یا ویس ثبت کنید.',
+        '',
+        'با دکمه «ثبت وظیفه» مدیر می‌تواند برای مدیر دیگر در یک پروژه وظیفه ثبت کند و در صورت نیاز فایل وظیفه را هم ارسال کند.',
+        '',
+        'با دکمه «پروژه‌های من» فهرست پروژه‌های قابل دسترسی نمایش داده می‌شود.',
+        '',
+        'دستورات سریع:',
+        '/start - شروع و نمایش راهنما',
+        '/task - ثبت وظیفه برای مدیران',
+        '/projects - نمایش پروژه‌های من',
+        '/report - ثبت گزارش پروژه',
+        '/cancel - لغو عملیات جاری',
+    ].join('\n');
+};
 
 const buildProjectKeyboard = (
     projects: Array<{ _id: Types.ObjectId; title: string }>,
@@ -513,12 +546,13 @@ const handleProjectDescription = async (
 const handleStart = async (message: TelegramMessagePayload, user: BotUser) => {
     await upsertSession(message, user, { step: TelegramBotSessionStep.IDLE });
 
+    await sendTelegramBotMessage(getChatId(message), buildBotGuideText(user), {
+        replyMarkup: buildDefaultReplyKeyboard(),
+    });
+
     await sendTelegramBotMessage(
         getChatId(message),
-        [
-            `سلام ${escapeTelegramHtml(user.fullName || user.username)}.`,
-            'از این ربات می‌توانید گزارش، توضیح، فایل، عکس یا ویس را برای پروژه‌های خود ثبت کنید.',
-        ].join('\n'),
+        'از دکمه‌های زیر هم می‌توانید استفاده کنید:',
         { replyMarkup: buildMainKeyboard() },
     );
 };
@@ -603,12 +637,18 @@ const handleMessage = async (message: TelegramMessagePayload) => {
     const media = getMediaCandidate(message);
     const description = String(message.caption || message.text || '').trim();
 
-    if (text === '/start' || text === 'start') {
+    if (
+        text === '/start' ||
+        text === 'start' ||
+        text === 'شروع' ||
+        text === 'راهنما' ||
+        text === 'شروع / راهنما'
+    ) {
         await handleStart(message, user);
         return;
     }
 
-    if (text === '/cancel' || text === 'لغو') {
+    if (text === '/cancel' || text === 'لغو' || text === 'لغو عملیات') {
         await resetSession(message, user);
         await sendTelegramBotMessage(getChatId(message), 'عملیات جاری لغو شد.', {
             replyMarkup: buildMainKeyboard(),
@@ -616,12 +656,16 @@ const handleMessage = async (message: TelegramMessagePayload) => {
         return;
     }
 
-    if (text === '/projects') {
+    if (text === '/projects' || text === 'پروژه‌های من') {
         await sendProjectsList(message, user);
         return;
     }
 
-    if (text === '/new' || text === '/report') {
+    if (
+        text === '/new' ||
+        text === '/report' ||
+        text === 'ثبت گزارش پروژه'
+    ) {
         await sendProjectSelection(message, user);
         return;
     }
