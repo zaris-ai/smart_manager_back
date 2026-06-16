@@ -10,6 +10,11 @@ export type ProjectFileCategory =
   | 'task_attachment'
   | 'other';
 
+export type ProjectFileTranscriptionStatus =
+  | 'not_applicable'
+  | 'completed'
+  | 'failed';
+
 export interface ProjectFileDocument {
   _id: Types.ObjectId;
   projectId: Types.ObjectId;
@@ -22,6 +27,13 @@ export interface ProjectFileDocument {
   fileType?: string;
   fileSize?: number;
   category: ProjectFileCategory;
+  categoryLabel?: string;
+  transcriptionStatus?: ProjectFileTranscriptionStatus;
+  transcriptionText?: string;
+  transcriptionError?: string;
+  transcriptionModel?: string;
+  transcriptionLanguage?: string;
+  transcribedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,6 +100,41 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
       ],
       default: 'other',
       index: true,
+    },
+    categoryLabel: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcriptionStatus: {
+      type: String,
+      enum: ['not_applicable', 'completed', 'failed'],
+      default: 'not_applicable',
+      index: true,
+    },
+    transcriptionText: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcriptionError: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcriptionModel: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcriptionLanguage: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcribedAt: {
+      type: Date,
+      default: null,
     },
   },
   {

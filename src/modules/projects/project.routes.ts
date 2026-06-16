@@ -1,5 +1,4 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
-import fs from 'fs';
 import multer from 'multer';
 import path from 'path';
 import { requireAuth } from '@/modules/auth/auth.middleware';
@@ -56,30 +55,6 @@ const routeHandler = (controller: AsyncController): RequestHandler => {
 };
 
 const router = Router();
-
-const uploadDir = path.join(process.cwd(), 'uploads', 'projects');
-
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const projectFileStorage = multer.diskStorage({
-  destination: (_req, _file, callback) => {
-    callback(null, uploadDir);
-  },
-  filename: (_req, file, callback) => {
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-
-    callback(null, `${Date.now()}-${safeName}`);
-  },
-});
-
-const projectFileUpload = multer({
-  storage: projectFileStorage,
-  limits: {
-    fileSize: 25 * 1024 * 1024,
-  },
-});
 
 const excelUpload = multer({
   storage: multer.memoryStorage(),
@@ -141,7 +116,7 @@ router.delete('/:id/tasks/:taskId', routeHandler(archiveProjectTask));
 router.get('/:id/notes', routeHandler(listProjectNotes));
 router.post(
   '/:id/notes',
-  projectFileUpload.single('file'),
+  projectUpload.single('file'),
   routeHandler(createProjectNote),
 );
 
@@ -151,7 +126,7 @@ router.post(
 router.get('/:id/files', routeHandler(listProjectFiles));
 router.post(
   '/:id/files',
-  projectFileUpload.single('file'),
+  projectUpload.single('file'),
   routeHandler(createProjectFile),
 );
 router.delete('/:id/files/:fileId', routeHandler(deleteProjectFile));

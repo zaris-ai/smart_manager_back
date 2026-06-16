@@ -75,4 +75,12 @@ export const env = {
   telegramAlertDashboardUrl: optionalEnv('TELEGRAM_ALERT_DASHBOARD_URL', ''),
   telegramWebhookSecret: optionalEnv('TELEGRAM_WEBHOOK_SECRET', ''),
   telegramBotPublicUrl: optionalEnv('TELEGRAM_BOT_PUBLIC_URL', ''),
+
+  openaiApiKey: optionalEnv('OPENAI_API_KEY', ''),
+  openaiBaseUrl: optionalEnv('OPENAI_BASE_URL', 'https://api.openai.com/v1').replace(/\/$/, ''),
+  openaiTranscriptionModel: optionalEnv(
+    'OPENAI_TRANSCRIPTION_MODEL',
+    'gpt-4o-mini-transcribe',
+  ),
+  openaiTranscriptionLanguage: optionalEnv('OPENAI_TRANSCRIPTION_LANGUAGE', 'fa'),
 };

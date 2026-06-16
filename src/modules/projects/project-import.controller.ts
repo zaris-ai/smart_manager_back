@@ -159,6 +159,28 @@ const normalizeStatus = (value: unknown): ProjectStatus | null => {
   if (!text) return ProjectStatus.PLANNING;
 
   const map: Record<string, ProjectStatus> = {
+    negotiating: ProjectStatus.NEGOTIATING,
+    negotiation: ProjectStatus.NEGOTIATING,
+    مذاکره: ProjectStatus.NEGOTIATING,
+    'در حال مذاکره': ProjectStatus.NEGOTIATING,
+
+    proposal_drafting: ProjectStatus.PROPOSAL_DRAFTING,
+    drafting_proposal: ProjectStatus.PROPOSAL_DRAFTING,
+    proposal: ProjectStatus.PROPOSAL_DRAFTING,
+    پروپوزال: ProjectStatus.PROPOSAL_DRAFTING,
+    'تدوین پروپوزال': ProjectStatus.PROPOSAL_DRAFTING,
+    'تهیه پروپوزال': ProjectStatus.PROPOSAL_DRAFTING,
+    'پیش‌نویس پروپوزال': ProjectStatus.PROPOSAL_DRAFTING,
+    'پیشنهاد فنی': ProjectStatus.PROPOSAL_DRAFTING,
+
+    contract_signing: ProjectStatus.CONTRACT_SIGNING,
+    signing_contract: ProjectStatus.CONTRACT_SIGNING,
+    contract: ProjectStatus.CONTRACT_SIGNING,
+    قرارداد: ProjectStatus.CONTRACT_SIGNING,
+    'عقد قرارداد': ProjectStatus.CONTRACT_SIGNING,
+    'امضای قرارداد': ProjectStatus.CONTRACT_SIGNING,
+    'در حال عقد قرارداد': ProjectStatus.CONTRACT_SIGNING,
+
     planning: ProjectStatus.PLANNING,
     برنامه‌ریزی: ProjectStatus.PLANNING,
     برنامه_ریزی: ProjectStatus.PLANNING,

@@ -16,6 +16,10 @@ import {
   ProjectTaskStatus,
   PROJECT_TASK_STATUS_LABELS,
 } from './project.model';
+import {
+  isTranscribableAudioFile,
+  transcribeAudioFile,
+} from './audio-transcription.service';
 
 type AppRole = 'manager' | 'employee';
 
@@ -61,6 +65,23 @@ const isValidObjectId = (value?: string): boolean => {
 
 const toObjectId = (value: string): Types.ObjectId => {
   return new mongoose.Types.ObjectId(value);
+};
+
+const buildProjectUploadFileUrl = (fileName: string): string => {
+  return `/api/v1/uploads/projects/${fileName}`;
+};
+
+const buildTranscriptionFields = async (file: Express.Multer.File) => {
+  const transcription = await transcribeAudioFile(file);
+
+  return {
+    transcriptionStatus: transcription.status,
+    transcriptionText: transcription.text,
+    transcriptionError: transcription.error || '',
+    transcriptionModel: transcription.model || '',
+    transcriptionLanguage: transcription.language || '',
+    transcribedAt: transcription.transcribedAt || null,
+  };
 };
 
 const sendValidationError = (res: Response, message: string, details?: unknown) => {
@@ -605,6 +626,10 @@ export const updateProject = async (req: AuthRequest, res: Response) => {
     const ownerId =
       update.ownerId instanceof Types.ObjectId ? update.ownerId : project.ownerId;
 
+    if (!ownerId) {
+      return sendValidationError(res, 'مسئول پروژه برای این پروژه ثبت نشده است.');
+    }
+
     update.assignedUserIds = Array.from(
       new Set([
         ownerId.toString(),
@@ -722,7 +747,13 @@ export const removeUserFromProject = async (req: AuthRequest, res: Response) => 
     return sendNotFound(res, 'پروژه پیدا نشد.');
   }
 
-  if (project.ownerId.toString() === userId) {
+  const ownerId = project.ownerId;
+
+  if (!ownerId) {
+    return sendValidationError(res, 'مسئول پروژه برای این پروژه ثبت نشده است.');
+  }
+
+  if (ownerId.toString() === userId) {
     return sendValidationError(res, 'مسئول پروژه را نمی‌توان از اعضا حذف کرد.');
   }
 
@@ -1050,9 +1081,28 @@ export const createProjectNote = async (req: AuthRequest, res: Response) => {
   }
 
   const { note, progressPercent, statusSnapshot, authorId } = req.body;
+  const rawNote = typeof note === 'string' ? note.trim() : '';
+  const hasAudioFile = isTranscribableAudioFile(req.file || null);
+  const transcriptionFields = req.file
+    ? await buildTranscriptionFields(req.file)
+    : null;
 
-  if (!note || typeof note !== 'string' || !note.trim()) {
-    return sendValidationError(res, 'متن گزارش کار الزامی است.');
+  const finalNote =
+    rawNote ||
+    (transcriptionFields?.transcriptionStatus === 'completed'
+      ? transcriptionFields.transcriptionText.trim()
+      : '');
+
+  if (!finalNote) {
+    return sendValidationError(
+      res,
+      hasAudioFile
+        ? 'متن گزارش خالی است و تبدیل فایل صوتی به متن هم انجام نشد.'
+        : 'متن گزارش کار الزامی است.',
+      transcriptionFields?.transcriptionError
+        ? { transcriptionError: transcriptionFields.transcriptionError }
+        : undefined,
+    );
   }
 
   let noteAuthorId: Types.ObjectId;
@@ -1091,7 +1141,7 @@ export const createProjectNote = async (req: AuthRequest, res: Response) => {
     projectId: toObjectId(id),
     authorId: noteAuthorId,
     registeredById: toObjectId(authUserId),
-    note: note.trim(),
+    note: finalNote,
     progressPercent: parsedProgressPercent,
     statusSnapshot: normalizedSnapshot,
     language: 'fa',
@@ -1106,11 +1156,12 @@ export const createProjectNote = async (req: AuthRequest, res: Response) => {
       uploadedBy: toObjectId(authUserId),
       fileName: req.file.filename,
       originalName: req.file.originalname,
-      fileUrl: `/api/v1/uploads/projects/${req.file.filename}`,
+      fileUrl: buildProjectUploadFileUrl(req.file.filename),
       fileType: req.file.mimetype,
       fileSize: req.file.size,
       category: ProjectFileCategory.REPORTS,
       categoryLabel: PROJECT_FILE_CATEGORY_LABELS[ProjectFileCategory.REPORTS],
+      ...(transcriptionFields || {}),
       language: 'fa',
       direction: 'rtl',
       source: 'web',
@@ -1215,17 +1266,20 @@ export const uploadProjectFile = async (req: AuthRequest, res: Response) => {
     progressNoteObjectId = toObjectId(rawProgressNoteId);
   }
 
+  const transcriptionFields = await buildTranscriptionFields(req.file);
+
   const file = await ProjectFile.create({
     projectId: toObjectId(id),
     progressNoteId: progressNoteObjectId,
     uploadedBy: toObjectId(authUserId),
     fileName: req.file.filename,
     originalName: req.file.originalname,
-    fileUrl: `/api/v1/uploads/projects/${req.file.filename}`,
+    fileUrl: buildProjectUploadFileUrl(req.file.filename),
     fileType: req.file.mimetype,
     fileSize: req.file.size,
     category: normalizedCategory,
     categoryLabel: PROJECT_FILE_CATEGORY_LABELS[normalizedCategory],
+    ...transcriptionFields,
     language: 'fa',
     direction: 'rtl',
   });

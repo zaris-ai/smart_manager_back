@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import { ProjectTaskModel } from './project-task.model';
 import { ProjectFileModel } from './project-file.model';
+import { transcribeAudioFile } from './audio-transcription.service';
 
 const isValidObjectId = (value?: string) => {
   return Boolean(value && mongoose.Types.ObjectId.isValid(value));
@@ -87,6 +88,23 @@ const formatTaskWithFiles = async (task: any) => {
   };
 };
 
+const buildProjectUploadFileUrl = (fileName: string): string => {
+  return `/api/v1/uploads/projects/${fileName}`;
+};
+
+const buildTranscriptionFields = async (file: Express.Multer.File) => {
+  const transcription = await transcribeAudioFile(file);
+
+  return {
+    transcriptionStatus: transcription.status,
+    transcriptionText: transcription.text,
+    transcriptionError: transcription.error || '',
+    transcriptionModel: transcription.model || '',
+    transcriptionLanguage: transcription.language || '',
+    transcribedAt: transcription.transcribedAt || null,
+  };
+};
+
 const createTaskFiles = async (
   req: Request,
   projectId: string,
@@ -95,27 +113,48 @@ const createTaskFiles = async (
   const files = (req.files || []) as Express.Multer.File[];
   const uploadedBy = getCurrentUserId(req);
 
-  if (!files.length) return [];
+  if (!files.length) {
+    return {
+      records: [],
+      completedTranscriptText: '',
+    };
+  }
 
-  const records = await ProjectFileModel.insertMany(
-    files.map((file) => ({
-      projectId: new mongoose.Types.ObjectId(projectId),
-      taskId: new mongoose.Types.ObjectId(taskId),
-      progressNoteId: null,
-      uploadedBy:
-        uploadedBy && isValidObjectId(uploadedBy)
-          ? new mongoose.Types.ObjectId(uploadedBy)
-          : null,
-      fileName: file.filename,
-      originalName: file.originalname,
-      fileUrl: `/uploads/projects/${file.filename}`,
-      fileType: file.mimetype,
-      fileSize: file.size,
-      category: 'task_attachment',
-    })),
+  const records = await Promise.all(
+    files.map(async (file) => {
+      const transcriptionFields = await buildTranscriptionFields(file);
+
+      const record = await ProjectFileModel.create({
+        projectId: new mongoose.Types.ObjectId(projectId),
+        taskId: new mongoose.Types.ObjectId(taskId),
+        progressNoteId: null,
+        uploadedBy:
+          uploadedBy && isValidObjectId(uploadedBy)
+            ? new mongoose.Types.ObjectId(uploadedBy)
+            : null,
+        fileName: file.filename,
+        originalName: file.originalname,
+        fileUrl: buildProjectUploadFileUrl(file.filename),
+        fileType: file.mimetype,
+        fileSize: file.size,
+        category: 'task_attachment',
+        categoryLabel: 'پیوست وظیفه',
+        ...transcriptionFields,
+      });
+
+      return record;
+    }),
   );
 
-  return records;
+  const completedTranscriptText = records
+    .map((record: any) => String(record.transcriptionText || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+
+  return {
+    records,
+    completedTranscriptText,
+  };
 };
 
 export const projectTaskController = {
@@ -318,7 +357,16 @@ export const projectTaskController = {
       });
     }
 
-    await createTaskFiles(req, projectId, taskId);
+    const { completedTranscriptText } = await createTaskFiles(
+      req,
+      projectId,
+      taskId,
+    );
+
+    if (!String(task.description || '').trim() && completedTranscriptText) {
+      task.description = completedTranscriptText;
+      await task.save();
+    }
 
     const populatedTask = await ProjectTaskModel.findById(task._id).populate(
       populateTask(),

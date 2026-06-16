@@ -3,6 +3,9 @@
 import mongoose, { Document, Model, Schema, Types } from 'mongoose';
 
 export enum ProjectStatus {
+  NEGOTIATING = 'negotiating',
+  PROPOSAL_DRAFTING = 'proposal_drafting',
+  CONTRACT_SIGNING = 'contract_signing',
   PLANNING = 'planning',
   ACTIVE = 'active',
   ON_HOLD = 'on_hold',
@@ -48,7 +51,15 @@ export enum ProjectSource {
   TELEGRAM_BOT = 'telegram_bot',
 }
 
+export type ProjectFileTranscriptionStatus =
+  | 'not_applicable'
+  | 'completed'
+  | 'failed';
+
 export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
+  [ProjectStatus.NEGOTIATING]: 'در حال مذاکره',
+  [ProjectStatus.PROPOSAL_DRAFTING]: 'تدوین پروپوزال',
+  [ProjectStatus.CONTRACT_SIGNING]: 'عقد قرارداد',
   [ProjectStatus.PLANNING]: 'برنامه‌ریزی',
   [ProjectStatus.ACTIVE]: 'فعال',
   [ProjectStatus.ON_HOLD]: 'متوقف موقت',
@@ -189,6 +200,12 @@ export interface ProjectFileDocument extends Document {
   telegramMessageId?: number | null;
   telegramChatId?: string;
   telegramAttachmentKind?: string;
+  transcriptionStatus?: ProjectFileTranscriptionStatus;
+  transcriptionText?: string;
+  transcriptionError?: string;
+  transcriptionModel?: string;
+  transcriptionLanguage?: string;
+  transcribedAt?: Date | null;
   language?: 'fa';
   direction?: 'rtl';
   createdAt: Date;
@@ -543,6 +560,36 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
       type: String,
       default: '',
     },
+    transcriptionStatus: {
+      type: String,
+      enum: ['not_applicable', 'completed', 'failed'],
+      default: 'not_applicable',
+      index: true,
+    },
+    transcriptionText: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcriptionError: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcriptionModel: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcriptionLanguage: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    transcribedAt: {
+      type: Date,
+      default: null,
+    },
     language: {
       type: String,
       default: 'fa',
@@ -571,7 +618,7 @@ ProjectFileSchema.index({ taskId: 1, createdAt: -1 });
 ProjectFileSchema.index({ progressNoteId: 1, createdAt: -1 });
 ProjectFileSchema.index({ uploadedBy: 1 });
 ProjectFileSchema.index(
-  { originalName: 'text', fileName: 'text' },
+  { originalName: 'text', fileName: 'text', transcriptionText: 'text' },
   TEXT_INDEX_OPTIONS,
 );
 
