@@ -33,7 +33,7 @@ export type ProjectFileTranscriptionFields = {
   transcribedAt: Date | null;
 };
 
-const SUPPORTED_AUDIO_EXTENSIONS = new Set([
+const OPENAI_TRANSCRIPTION_AUDIO_EXTENSIONS = new Set([
   ".flac",
   ".mp3",
   ".mp4",
@@ -41,14 +41,85 @@ const SUPPORTED_AUDIO_EXTENSIONS = new Set([
   ".mpga",
   ".m4a",
   ".ogg",
-  ".oga",
-  ".opus",
   ".wav",
   ".webm",
 ]);
 
+const TELEGRAM_OGG_OPUS_EXTENSIONS = new Set([".oga", ".opus"]);
+
+const SUPPORTED_AUDIO_EXTENSIONS = new Set([
+  ...OPENAI_TRANSCRIPTION_AUDIO_EXTENSIONS,
+  ...TELEGRAM_OGG_OPUS_EXTENSIONS,
+]);
+
 const TELEGRAM_AUDIO_KINDS = new Set(["voice", "audio"]);
-const MAX_TRANSCRIPTION_FILE_SIZE_BYTES = 1024 * 1024 * 100;
+const MAX_TRANSCRIPTION_FILE_SIZE_BYTES = 1024 * 1024 * 25;
+
+const MIME_TYPE_TO_OPENAI_EXTENSION: Record<string, string> = {
+  "audio/flac": ".flac",
+  "audio/mp3": ".mp3",
+  "audio/mpeg": ".mp3",
+  "audio/mp4": ".mp4",
+  "audio/mpga": ".mpga",
+  "audio/m4a": ".m4a",
+  "audio/ogg": ".ogg",
+  "audio/oga": ".ogg",
+  "audio/opus": ".ogg",
+  "audio/wav": ".wav",
+  "audio/x-wav": ".wav",
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+};
+
+const getOpenAiTranscriptionExtension = (input: {
+  fileName: string;
+  mimeType: string;
+}): string => {
+  const extension = path.extname(input.fileName || "").toLowerCase();
+  const mimeType = String(input.mimeType || "").toLowerCase();
+
+  if (OPENAI_TRANSCRIPTION_AUDIO_EXTENSIONS.has(extension)) {
+    return extension;
+  }
+
+  if (TELEGRAM_OGG_OPUS_EXTENSIONS.has(extension)) {
+    return ".ogg";
+  }
+
+  if (MIME_TYPE_TO_OPENAI_EXTENSION[mimeType]) {
+    return MIME_TYPE_TO_OPENAI_EXTENSION[mimeType];
+  }
+
+  if (mimeType.includes("ogg") || mimeType.includes("opus")) {
+    return ".ogg";
+  }
+
+  if (mimeType.includes("webm")) {
+    return ".webm";
+  }
+
+  return extension;
+};
+
+const buildOpenAiTranscriptionFileMeta = (input: {
+  fileName: string;
+  mimeType: string;
+}): { fileName: string; mimeType: string } => {
+  const extension = path.extname(input.fileName || "").toLowerCase();
+  const targetExtension = getOpenAiTranscriptionExtension(input);
+  const baseName = path.basename(input.fileName || "audio", extension) || "audio";
+  const safeBaseName = baseName.replace(/[^a-zA-Z0-9._-]+/g, "_") || "audio";
+
+  const normalizedMimeType =
+    targetExtension === ".ogg"
+      ? "audio/ogg"
+      : input.mimeType || "application/octet-stream";
+
+  return {
+    fileName: `${safeBaseName}${targetExtension || ".ogg"}`,
+    mimeType: normalizedMimeType,
+  };
+};
 
 export const isTranscribableAudioMeta = (input: {
   mimeType?: string;
@@ -168,11 +239,15 @@ export const transcribeAudioPath = async (
   try {
     const audioBuffer = await fs.readFile(input.path);
     const formData = new FormData();
+    const openAiFileMeta = buildOpenAiTranscriptionFileMeta({
+      fileName,
+      mimeType,
+    });
 
     formData.append(
       "file",
-      new Blob([audioBuffer as any], { type: mimeType }),
-      fileName,
+      new Blob([audioBuffer as any], { type: openAiFileMeta.mimeType }),
+      openAiFileMeta.fileName,
     );
     formData.append("model", env.openaiTranscriptionModel);
     formData.append("response_format", "json");
