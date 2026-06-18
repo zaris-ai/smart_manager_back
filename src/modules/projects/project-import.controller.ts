@@ -22,6 +22,13 @@ type AuthRequest = Request & {
 
 type RawExcelRow = Record<string, unknown>;
 
+type ProjectImportMemberMeta = {
+  username: string;
+  roleInProject: string;
+  startedAt: Date | null;
+  expectedFinishedAt: Date | null;
+};
+
 type NormalizedProjectRow = {
   rowNumber: number;
   title: string;
@@ -32,6 +39,7 @@ type NormalizedProjectRow = {
   dueDate: Date | null;
   ownerUsername: string;
   assignedUsernames: string[];
+  memberMeta: ProjectImportMemberMeta[];
 };
 
 type ImportErrorItem = {
@@ -118,6 +126,13 @@ const splitUsernames = (value: unknown): string[] => {
         .filter(Boolean),
     ),
   );
+};
+
+const splitTextList = (value: unknown): string[] => {
+  return toText(value)
+    .split(/[,،]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
 };
 
 const parseDateValue = (value: unknown): Date | null => {
@@ -298,6 +313,25 @@ const normalizeProjectRows = (
       'کاربران مسئول',
       'اعضا',
     ]);
+    const rawMemberRoles = readCell(row, [
+      'member_roles',
+      'project_member_roles',
+      'roles',
+      'نقش اعضا',
+      'نقش‌ها',
+    ]);
+    const rawMemberStartedAt = readCell(row, [
+      'member_started_at',
+      'member_start_dates',
+      'started_at',
+      'تاریخ شروع اعضا',
+    ]);
+    const rawMemberExpectedFinishedAt = readCell(row, [
+      'member_expected_finished_at',
+      'member_due_dates',
+      'expected_finished_at',
+      'تاریخ پایان احتمالی اعضا',
+    ]);
 
     const rowIsEmpty = [
       title,
@@ -308,6 +342,9 @@ const normalizeProjectRows = (
       rawDueDate,
       rawOwnerUsername,
       rawAssignedUsernames,
+      rawMemberRoles,
+      rawMemberStartedAt,
+      rawMemberExpectedFinishedAt,
     ].every((item) => !cellHasValue(item));
 
     if (rowIsEmpty) return;
@@ -366,6 +403,19 @@ const normalizeProjectRows = (
       return;
     }
 
+    const assignedUsernames = splitUsernames(rawAssignedUsernames);
+    const roleItems = splitTextList(rawMemberRoles);
+    const memberStartedAtItems = splitTextList(rawMemberStartedAt);
+    const memberExpectedFinishedAtItems = splitTextList(rawMemberExpectedFinishedAt);
+
+    const memberMeta = assignedUsernames.map((username, memberIndex) => ({
+      username,
+      roleInProject: roleItems[memberIndex] || 'عضو پروژه',
+      startedAt: parseDateValue(memberStartedAtItems[memberIndex]) || startDate,
+      expectedFinishedAt:
+        parseDateValue(memberExpectedFinishedAtItems[memberIndex]) || dueDate,
+    }));
+
     validRows.push({
       rowNumber,
       title,
@@ -375,7 +425,8 @@ const normalizeProjectRows = (
       startDate: startDate as Date,
       dueDate,
       ownerUsername,
-      assignedUsernames: splitUsernames(rawAssignedUsernames),
+      assignedUsernames,
+      memberMeta,
     });
   });
 
@@ -528,14 +579,41 @@ export const importProjectsFromExcel = async (
       continue;
     }
 
-    const assignedIds = Array.from(
+    const assignedIdStrings = Array.from(
       new Set([
         String(owner._id),
         ...row.assignedUsernames.map((username) =>
           String(userMap.get(username)._id),
         ),
       ]),
-    ).map(toObjectId);
+    );
+
+    const assignedIds = assignedIdStrings.map(toObjectId);
+
+    const memberMetaByUsername = new Map(
+      row.memberMeta.map((member) => [member.username, member]),
+    );
+
+    const projectMembers = assignedIdStrings.map((userId) => {
+      const username =
+        userId === String(owner._id)
+          ? row.ownerUsername
+          : row.assignedUsernames.find((item) => {
+              return String(userMap.get(item)?._id) === userId;
+            });
+
+      const meta = username ? memberMetaByUsername.get(username) : undefined;
+
+      return {
+        userId: toObjectId(userId),
+        roleInProject:
+          userId === String(owner._id)
+            ? 'مسئول پروژه'
+            : meta?.roleInProject || 'عضو پروژه',
+        startedAt: meta?.startedAt || row.startDate,
+        expectedFinishedAt: meta?.expectedFinishedAt || row.dueDate,
+      };
+    });
 
     const project = await Project.create({
       title: row.title,
@@ -548,6 +626,7 @@ export const importProjectsFromExcel = async (
       dueDate: row.dueDate,
       ownerId: toObjectId(String(owner._id)),
       assignedUserIds: assignedIds,
+      projectMembers,
       language: 'fa',
       direction: 'rtl',
       createdBy: toObjectId(authUserId),

@@ -16,6 +16,7 @@ import {
   ProjectTaskStatus,
   PROJECT_TASK_STATUS_LABELS,
 } from './project.model';
+import { ProjectRole } from '@/modules/project-roles/project-role.model';
 import {
   isTranscribableAudioFile,
   transcribeAudioFile,
@@ -33,6 +34,22 @@ type AuthRequest = Request & {
     fullName?: string;
     username?: string;
   };
+};
+
+type ProjectMemberPayload = {
+  userId: string;
+  roleId: string | null;
+  roleInProject: string;
+  startedAt: Date | null;
+  expectedFinishedAt: Date | null;
+};
+
+type ProjectMemberRecord = {
+  userId: Types.ObjectId;
+  roleId: Types.ObjectId | null;
+  roleInProject: string;
+  startedAt: Date | null;
+  expectedFinishedAt: Date | null;
 };
 
 const USER_SELECT =
@@ -176,10 +193,190 @@ const normalizeObjectIdArray = (value: unknown): Types.ObjectId[] => {
   return uniqueIds.map(toObjectId);
 };
 
+const getProjectMembersPayload = (body: Record<string, unknown>): unknown => {
+  if (Array.isArray(body.projectMembers)) return body.projectMembers;
+  if (Array.isArray(body.members)) return body.members;
+
+  return [];
+};
+
+const normalizeProjectMembersPayload = (value: unknown): ProjectMemberPayload[] => {
+  if (!Array.isArray(value)) return [];
+
+  const map = new Map<string, ProjectMemberPayload>();
+
+  value.forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+
+    const payload = item as Record<string, unknown>;
+    const userId = String(payload.userId || '').trim();
+
+    if (!isValidObjectId(userId)) return;
+
+    const roleId = String(payload.roleId || '').trim();
+
+    map.set(userId, {
+      userId,
+      roleId: isValidObjectId(roleId) ? roleId : null,
+      roleInProject:
+        typeof payload.roleInProject === 'string'
+          ? payload.roleInProject.trim()
+          : '',
+      startedAt: normalizeOptionalDate(payload.startedAt),
+      expectedFinishedAt: normalizeOptionalDate(payload.expectedFinishedAt),
+    });
+  });
+
+  return Array.from(map.values());
+};
+
+const buildExistingProjectMemberMap = (project: any): Map<string, ProjectMemberPayload> => {
+  const map = new Map<string, ProjectMemberPayload>();
+  const members = Array.isArray(project?.projectMembers) ? project.projectMembers : [];
+
+  members.forEach((member: any) => {
+    const rawUserId = member?.userId?._id || member?.userId;
+    const userId = String(rawUserId || '').trim();
+
+    if (!isValidObjectId(userId)) return;
+
+    const rawRoleId = member?.roleId?._id || member?.roleId;
+    const roleId = String(rawRoleId || '').trim();
+
+    map.set(userId, {
+      userId,
+      roleId: isValidObjectId(roleId) ? roleId : null,
+      roleInProject: String(member.roleInProject || '').trim(),
+      startedAt: member.startedAt ? new Date(member.startedAt) : null,
+      expectedFinishedAt: member.expectedFinishedAt
+        ? new Date(member.expectedFinishedAt)
+        : null,
+    });
+  });
+
+  return map;
+};
+
+
+const attachProjectRoleTitles = async (
+  members: ProjectMemberPayload[],
+): Promise<{ members: ProjectMemberPayload[]; error: string | null }> => {
+  const roleIds = Array.from(
+    new Set(
+      members
+        .map((member) => member.roleId)
+        .filter((roleId): roleId is string => Boolean(roleId && isValidObjectId(roleId))),
+    ),
+  );
+
+  if (!roleIds.length) {
+    return { members, error: null };
+  }
+
+  const roles = await ProjectRole.find({
+    _id: { $in: roleIds.map(toObjectId) },
+    isActive: true,
+  })
+    .select('title')
+    .lean();
+
+  const roleTitleMap = new Map(
+    roles.map((role: any) => [String(role._id), String(role.title || '').trim()]),
+  );
+
+  const missingRoleId = roleIds.find((roleId) => !roleTitleMap.has(roleId));
+
+  if (missingRoleId) {
+    return {
+      members,
+      error: 'نقش انتخاب‌شده برای عضو پروژه معتبر یا فعال نیست.',
+    };
+  }
+
+  return {
+    members: members.map((member) => ({
+      ...member,
+      roleInProject: member.roleId
+        ? roleTitleMap.get(member.roleId) || member.roleInProject
+        : member.roleInProject,
+    })),
+    error: null,
+  };
+};
+
+const buildProjectMembers = ({
+  userIds,
+  ownerId,
+  requestedMembers,
+  existingMembers,
+  fallbackStartDate,
+  fallbackExpectedFinishedAt,
+}: {
+  userIds: string[];
+  ownerId: string;
+  requestedMembers: ProjectMemberPayload[];
+  existingMembers?: Map<string, ProjectMemberPayload>;
+  fallbackStartDate?: Date | null;
+  fallbackExpectedFinishedAt?: Date | null;
+}): ProjectMemberRecord[] => {
+  const requestedMap = new Map(
+    requestedMembers.map((member) => [member.userId, member]),
+  );
+
+  const uniqueIds = Array.from(
+    new Set([ownerId, ...userIds, ...requestedMembers.map((member) => member.userId)]),
+  ).filter(isValidObjectId);
+
+  return uniqueIds.map((userId) => {
+    const requested = requestedMap.get(userId);
+    const existing = existingMembers?.get(userId);
+
+    const roleId = requested?.roleId || existing?.roleId || null;
+    const roleInProject =
+      requested?.roleInProject ||
+      existing?.roleInProject ||
+      (userId === ownerId ? 'مسئول پروژه' : 'عضو پروژه');
+
+    return {
+      userId: toObjectId(userId),
+      roleId: roleId && isValidObjectId(roleId) ? toObjectId(roleId) : null,
+      roleInProject,
+      startedAt:
+        requested?.startedAt ??
+        existing?.startedAt ??
+        fallbackStartDate ??
+        null,
+      expectedFinishedAt:
+        requested?.expectedFinishedAt ??
+        existing?.expectedFinishedAt ??
+        fallbackExpectedFinishedAt ??
+        null,
+    };
+  });
+};
+
+const validateProjectMembersDates = (
+  members: ProjectMemberRecord[],
+): string | null => {
+  const invalidMember = members.find((member) => {
+    return (
+      member.startedAt &&
+      member.expectedFinishedAt &&
+      member.expectedFinishedAt < member.startedAt
+    );
+  });
+
+  if (!invalidMember) return null;
+
+  return 'تاریخ پایان احتمالی عضو پروژه نمی‌تواند قبل از تاریخ شروع او باشد.';
+};
+
 const populateProjectQuery = (query: any) => {
   return query
     .populate('ownerId', USER_SELECT)
     .populate('assignedUserIds', USER_SELECT)
+    .populate('projectMembers.userId', USER_SELECT)
+    .populate('projectMembers.roleId', 'title description isActive sortOrder')
     .populate('createdBy', USER_SELECT)
     .populate('updatedBy', USER_SELECT);
 };
@@ -482,13 +679,39 @@ export const createProject = async (req: AuthRequest, res: Response) => {
 
   const normalizedOwnerId = toObjectId(ownerId);
   const normalizedAssignedUserIds = normalizeObjectIdArray(assignedUserIds);
+  const projectRoleResolution = await attachProjectRoleTitles(
+    normalizeProjectMembersPayload(getProjectMembersPayload(req.body)),
+  );
 
-  const finalAssignedUserIds = Array.from(
+  if (projectRoleResolution.error) {
+    return sendValidationError(res, projectRoleResolution.error);
+  }
+
+  const normalizedProjectMemberPayloads = projectRoleResolution.members;
+
+  const finalAssignedUserIdStrings = Array.from(
     new Set([
       normalizedOwnerId.toString(),
       ...normalizedAssignedUserIds.map((item) => item.toString()),
+      ...normalizedProjectMemberPayloads.map((member) => member.userId),
     ]),
-  ).map(toObjectId);
+  );
+
+  const projectMembers = buildProjectMembers({
+    userIds: finalAssignedUserIdStrings,
+    ownerId: normalizedOwnerId.toString(),
+    requestedMembers: normalizedProjectMemberPayloads,
+    fallbackStartDate: parsedStartDate,
+    fallbackExpectedFinishedAt: parsedDueDate,
+  });
+
+  const projectMemberDateError = validateProjectMembersDates(projectMembers);
+
+  if (projectMemberDateError) {
+    return sendValidationError(res, projectMemberDateError);
+  }
+
+  const finalAssignedUserIds = finalAssignedUserIdStrings.map(toObjectId);
 
   const project = await Project.create({
     title: title.trim(),
@@ -501,6 +724,7 @@ export const createProject = async (req: AuthRequest, res: Response) => {
     dueDate: parsedDueDate,
     ownerId: normalizedOwnerId,
     assignedUserIds: finalAssignedUserIds,
+    projectMembers,
     language: 'fa',
     direction: 'rtl',
     createdBy: toObjectId(authUserId),
@@ -620,9 +844,13 @@ export const updateProject = async (req: AuthRequest, res: Response) => {
     update.ownerId = toObjectId(req.body.ownerId);
   }
 
-  if ('assignedUserIds' in req.body) {
-    const assignedIds = normalizeObjectIdArray(req.body.assignedUserIds);
+  const shouldUpdateMembers =
+    'assignedUserIds' in req.body ||
+    'projectMembers' in req.body ||
+    'members' in req.body ||
+    'ownerId' in req.body;
 
+  if (shouldUpdateMembers) {
     const ownerId =
       update.ownerId instanceof Types.ObjectId ? update.ownerId : project.ownerId;
 
@@ -630,12 +858,48 @@ export const updateProject = async (req: AuthRequest, res: Response) => {
       return sendValidationError(res, 'مسئول پروژه برای این پروژه ثبت نشده است.');
     }
 
-    update.assignedUserIds = Array.from(
+    const assignedIds =
+      'assignedUserIds' in req.body
+        ? normalizeObjectIdArray(req.body.assignedUserIds)
+        : (project.assignedUserIds || []);
+
+    const projectRoleResolution = await attachProjectRoleTitles(
+      normalizeProjectMembersPayload(getProjectMembersPayload(req.body)),
+    );
+
+    if (projectRoleResolution.error) {
+      return sendValidationError(res, projectRoleResolution.error);
+    }
+
+    const normalizedProjectMemberPayloads = projectRoleResolution.members;
+
+    const finalAssignedUserIdStrings = Array.from(
       new Set([
         ownerId.toString(),
-        ...assignedIds.map((item) => item.toString()),
+        ...assignedIds.map((item: Types.ObjectId) => item.toString()),
+        ...normalizedProjectMemberPayloads.map((member) => member.userId),
       ]),
-    ).map(toObjectId);
+    );
+
+    const projectMembers = buildProjectMembers({
+      userIds: finalAssignedUserIdStrings,
+      ownerId: ownerId.toString(),
+      requestedMembers: normalizedProjectMemberPayloads,
+      existingMembers: buildExistingProjectMemberMap(project),
+      fallbackStartDate:
+        update.startDate instanceof Date ? update.startDate : project.startDate,
+      fallbackExpectedFinishedAt:
+        'dueDate' in update ? (update.dueDate as Date | null) : project.dueDate,
+    });
+
+    const projectMemberDateError = validateProjectMembersDates(projectMembers);
+
+    if (projectMemberDateError) {
+      return sendValidationError(res, projectMemberDateError);
+    }
+
+    update.assignedUserIds = finalAssignedUserIdStrings.map(toObjectId);
+    update.projectMembers = projectMembers;
   }
 
   const nextStartDate =
@@ -700,16 +964,60 @@ export const assignUsersToProject = async (req: AuthRequest, res: Response) => {
     return sendValidationError(res, 'شناسه کاربر جاری معتبر نیست.');
   }
 
-  const normalizedUserIds = normalizeObjectIdArray(userIds);
+  const project = await Project.findById(id);
 
-  const project = await populateProjectQuery(
+  if (!project) {
+    return sendNotFound(res, 'پروژه پیدا نشد.');
+  }
+
+  if (!project.ownerId) {
+    return sendValidationError(res, 'مسئول پروژه برای این پروژه ثبت نشده است.');
+  }
+
+  const normalizedUserIds = normalizeObjectIdArray(userIds);
+  const projectRoleResolution = await attachProjectRoleTitles(
+    normalizeProjectMembersPayload(getProjectMembersPayload(req.body)),
+  );
+
+  if (projectRoleResolution.error) {
+    return sendValidationError(res, projectRoleResolution.error);
+  }
+
+  const normalizedProjectMemberPayloads = projectRoleResolution.members;
+
+  const finalAssignedUserIdStrings = Array.from(
+    new Set([
+      project.ownerId.toString(),
+      ...(project.assignedUserIds || []).map((item: Types.ObjectId) =>
+        item.toString(),
+      ),
+      ...normalizedUserIds.map((item) => item.toString()),
+      ...normalizedProjectMemberPayloads.map((member) => member.userId),
+    ]),
+  );
+
+  const projectMembers = buildProjectMembers({
+    userIds: finalAssignedUserIdStrings,
+    ownerId: project.ownerId.toString(),
+    requestedMembers: normalizedProjectMemberPayloads,
+    existingMembers: buildExistingProjectMemberMap(project),
+    fallbackStartDate: project.startDate,
+    fallbackExpectedFinishedAt: project.dueDate,
+  });
+
+  const projectMemberDateError = validateProjectMembersDates(projectMembers);
+
+  if (projectMemberDateError) {
+    return sendValidationError(res, projectMemberDateError);
+  }
+
+  const updatedProject = await populateProjectQuery(
     Project.findByIdAndUpdate(
       id,
       {
-        $addToSet: {
-          assignedUserIds: { $each: normalizedUserIds },
-        },
         $set: {
+          assignedUserIds: finalAssignedUserIdStrings.map(toObjectId),
+          projectMembers,
           updatedBy: toObjectId(authUserId),
         },
       },
@@ -720,11 +1028,125 @@ export const assignUsersToProject = async (req: AuthRequest, res: Response) => {
     ),
   );
 
+  return sendSuccess(res, updatedProject, 'اعضای پروژه با موفقیت به‌روزرسانی شدند.');
+};
+
+export const updateProjectMember = async (req: AuthRequest, res: Response) => {
+  if (!isManager(req)) return sendForbidden(res);
+
+  const { id, userId } = req.params;
+  const authUserId = getAuthUserId(req);
+
+  if (!isValidObjectId(id) || !isValidObjectId(userId)) {
+    return sendValidationError(res, 'شناسه پروژه یا کاربر معتبر نیست.');
+  }
+
+  if (!isValidObjectId(authUserId)) {
+    return sendValidationError(res, 'شناسه کاربر جاری معتبر نیست.');
+  }
+
+  const project = await Project.findById(id);
+
   if (!project) {
     return sendNotFound(res, 'پروژه پیدا نشد.');
   }
 
-  return sendSuccess(res, project, 'کاربران با موفقیت به پروژه اضافه شدند.');
+  if (!project.ownerId) {
+    return sendValidationError(res, 'مسئول پروژه برای این پروژه ثبت نشده است.');
+  }
+
+  const requestedRoleId = String(req.body.roleId || '').trim();
+  const roleId = isValidObjectId(requestedRoleId) ? requestedRoleId : null;
+  const requestedRoleResolution = await attachProjectRoleTitles([
+    {
+      userId,
+      roleId,
+      roleInProject:
+        typeof req.body.roleInProject === 'string'
+          ? req.body.roleInProject.trim()
+          : '',
+      startedAt: null,
+      expectedFinishedAt: null,
+    },
+  ]);
+
+  if (requestedRoleResolution.error) {
+    return sendValidationError(res, requestedRoleResolution.error);
+  }
+
+  const resolvedRole = requestedRoleResolution.members[0];
+  const roleInProject = resolvedRole?.roleInProject || '';
+
+  const startedAt = normalizeOptionalDate(req.body.startedAt);
+  const expectedFinishedAt = normalizeOptionalDate(req.body.expectedFinishedAt);
+
+  if (startedAt && expectedFinishedAt && expectedFinishedAt < startedAt) {
+    return sendValidationError(
+      res,
+      'تاریخ پایان احتمالی عضو پروژه نمی‌تواند قبل از تاریخ شروع او باشد.',
+    );
+  }
+
+  const existingMembers = buildExistingProjectMemberMap(project);
+  const existingMember = existingMembers.get(userId);
+
+  existingMembers.set(userId, {
+    userId,
+    roleId:
+      roleId ||
+      existingMember?.roleId ||
+      null,
+    roleInProject:
+      roleInProject ||
+      existingMember?.roleInProject ||
+      (project.ownerId.toString() === userId ? 'مسئول پروژه' : 'عضو پروژه'),
+    startedAt:
+      req.body.startedAt !== undefined
+        ? startedAt
+        : existingMember?.startedAt || project.startDate || null,
+    expectedFinishedAt:
+      req.body.expectedFinishedAt !== undefined
+        ? expectedFinishedAt
+        : existingMember?.expectedFinishedAt || project.dueDate || null,
+  });
+
+  const finalAssignedUserIdStrings = Array.from(
+    new Set([
+      project.ownerId.toString(),
+      ...(project.assignedUserIds || []).map((item: Types.ObjectId) =>
+        item.toString(),
+      ),
+      userId,
+    ]),
+  );
+
+  const projectMembers = buildProjectMembers({
+    userIds: finalAssignedUserIdStrings,
+    ownerId: project.ownerId.toString(),
+    requestedMembers: Array.from(existingMembers.values()),
+    existingMembers,
+    fallbackStartDate: project.startDate,
+    fallbackExpectedFinishedAt: project.dueDate,
+  });
+
+  const updatedProject = await populateProjectQuery(
+    Project.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          assignedUserIds: finalAssignedUserIdStrings.map(toObjectId),
+          projectMembers,
+          updatedBy: toObjectId(authUserId),
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    ),
+  );
+
+  return sendSuccess(res, updatedProject, 'نقش و زمان‌بندی عضو پروژه با موفقیت ویرایش شد.');
 };
 
 export const removeUserFromProject = async (req: AuthRequest, res: Response) => {
@@ -761,7 +1183,10 @@ export const removeUserFromProject = async (req: AuthRequest, res: Response) => 
     Project.findByIdAndUpdate(
       id,
       {
-        $pull: { assignedUserIds: toObjectId(userId) },
+        $pull: {
+          assignedUserIds: toObjectId(userId),
+          projectMembers: { userId: toObjectId(userId) },
+        },
         $set: { updatedBy: toObjectId(authUserId) },
       },
       {
@@ -1362,12 +1787,15 @@ export const getCalendarEvents = async (req: AuthRequest, res: Response) => {
   }
 
   const [projects, tasks] = await Promise.all([
-    Project.find(projectFilter).populate('assignedUserIds', USER_SELECT),
+    Project.find(projectFilter)
+      .populate('assignedUserIds', USER_SELECT)
+      .populate('projectMembers.userId', USER_SELECT)
+    .populate('projectMembers.roleId', 'title description isActive sortOrder'),
     ProjectTask.find(taskFilter).populate('assignedUserIds', USER_SELECT),
   ]);
 
   const events = [
-    ...projects.flatMap((project) => {
+    ...projects.flatMap((project: any) => {
       const currentProjectId = project._id.toString();
 
       const projectEvents = [
@@ -1380,6 +1808,7 @@ export const getCalendarEvents = async (req: AuthRequest, res: Response) => {
           status: project.status,
           priority: project.priority,
           assignedUserIds: project.assignedUserIds,
+          projectMembers: project.projectMembers || [],
         },
       ];
 
@@ -1393,13 +1822,14 @@ export const getCalendarEvents = async (req: AuthRequest, res: Response) => {
           status: project.status,
           priority: project.priority,
           assignedUserIds: project.assignedUserIds,
-        });
+            projectMembers: project.projectMembers || [],
+          });
       }
 
       return projectEvents;
     }),
 
-    ...tasks.flatMap((task) => {
+    ...tasks.flatMap((task: any) => {
       const currentTaskId = task._id.toString();
       const taskEvents = [];
 

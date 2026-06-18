@@ -1,4 +1,4 @@
-import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
+import { NextFunction, RequestHandler, Response, Router } from 'express';
 import multer from 'multer';
 import path from 'path';
 import { requireAuth } from '@/modules/auth/auth.middleware';
@@ -19,33 +19,21 @@ import {
   listProjectTasks,
   removeUserFromProject,
   updateProject,
+  updateProjectMember,
   updateProjectTask,
 } from '@/modules/projects/project.controller';
 import { importProjectsFromExcel } from '@/modules/projects/project-import.controller';
-
-import { projectTaskController } from './project-task.controller';
+import { uploadProjectTaskFiles } from './project-task.controller';
 import { projectUpload } from './project-upload.middleware';
 
-
-type AsyncController = (
-  req: Request,
+type RouteController = (
+  req: any,
   res: Response,
-  next: NextFunction,
+  next?: NextFunction,
 ) => Promise<unknown> | unknown;
 
-/**
- * Project controllers currently return Response in many places:
- * return sendSuccess(...)
- * return sendValidationError(...)
- *
- * The shared asyncHandler expects Promise<void>, so passing these controllers
- * directly to asyncHandler creates TypeScript errors.
- *
- * This local adapter accepts any controller return value, awaits it, and returns
- * void to Express.
- */
-const routeHandler = (controller: AsyncController): RequestHandler => {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+const routeHandler = (controller: RouteController): RequestHandler => {
+  return async (req, res, next): Promise<void> => {
     try {
       await controller(req, res, next);
     } catch (error) {
@@ -97,9 +85,10 @@ router.patch('/:id', routeHandler(updateProject));
 router.delete('/:id', routeHandler(archiveProject));
 
 /**
- * Project users
+ * Project members
  */
 router.post('/:id/users', routeHandler(assignUsersToProject));
+router.patch('/:id/users/:userId', routeHandler(updateProjectMember));
 router.delete('/:id/users/:userId', routeHandler(removeUserFromProject));
 
 /**
@@ -109,6 +98,11 @@ router.get('/:id/tasks', routeHandler(listProjectTasks));
 router.post('/:id/tasks', routeHandler(createProjectTask));
 router.patch('/:id/tasks/:taskId', routeHandler(updateProjectTask));
 router.delete('/:id/tasks/:taskId', routeHandler(archiveProjectTask));
+router.post(
+  '/:id/tasks/:taskId/files',
+  projectUpload.array('files', 20),
+  routeHandler(uploadProjectTaskFiles),
+);
 
 /**
  * Project notes
@@ -130,20 +124,5 @@ router.post(
   routeHandler(createProjectFile),
 );
 router.delete('/:id/files/:fileId', routeHandler(deleteProjectFile));
-
-
-router.get('/:projectId/tasks', projectTaskController.listTasks);
-
-router.post('/:projectId/tasks', projectTaskController.createTask);
-
-router.patch('/:projectId/tasks/:taskId', projectTaskController.updateTask);
-
-router.post(
-  '/:projectId/tasks/:taskId/files',
-  projectUpload.array('files', 20),
-  projectTaskController.uploadTaskFiles,
-);
-
-router.delete('/:projectId/tasks/:taskId', projectTaskController.deleteTask);
 
 export default router;

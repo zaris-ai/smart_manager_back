@@ -124,6 +124,14 @@ const setJsonOptions = (schema: Schema): void => {
   });
 };
 
+export interface ProjectMemberSubdocument {
+  userId: Types.ObjectId;
+  roleId?: Types.ObjectId | null;
+  roleInProject: string;
+  startedAt?: Date | null;
+  expectedFinishedAt?: Date | null;
+}
+
 export interface ProjectDocument extends Document {
   title: string;
   description?: string;
@@ -135,6 +143,7 @@ export interface ProjectDocument extends Document {
   dueDate?: Date | null;
   ownerId?: Types.ObjectId | null;
   assignedUserIds: Types.ObjectId[];
+  projectMembers: ProjectMemberSubdocument[];
   createdBy?: Types.ObjectId | null;
   updatedBy?: Types.ObjectId | null;
   language?: 'fa';
@@ -212,6 +221,36 @@ export interface ProjectFileDocument extends Document {
   updatedAt: Date;
 }
 
+const ProjectMemberSchema = new Schema<ProjectMemberSubdocument>(
+  {
+    userId: {
+      ...objectIdRef('User', true),
+      index: true,
+    },
+    roleId: {
+      ...objectIdRef('ProjectRole'),
+      default: null,
+    },
+    roleInProject: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 120,
+    },
+    startedAt: {
+      type: Date,
+      default: null,
+    },
+    expectedFinishedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 const ProjectSchema = new Schema<ProjectDocument>(
   {
     title: {
@@ -262,6 +301,10 @@ const ProjectSchema = new Schema<ProjectDocument>(
         ...objectIdRef('User'),
       },
     ],
+    projectMembers: {
+      type: [ProjectMemberSchema],
+      default: [],
+    },
     createdBy: {
       ...objectIdRef('User'),
       default: null,
@@ -299,6 +342,9 @@ ProjectSchema.index(
 ProjectSchema.index({ status: 1, priority: 1 });
 ProjectSchema.index({ ownerId: 1 });
 ProjectSchema.index({ assignedUserIds: 1 });
+ProjectSchema.index({ 'projectMembers.userId': 1 });
+ProjectSchema.index({ 'projectMembers.roleId': 1 });
+ProjectSchema.index({ 'projectMembers.expectedFinishedAt': 1 });
 ProjectSchema.index({ dueDate: 1 });
 
 setJsonOptions(ProjectSchema);

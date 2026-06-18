@@ -8,33 +8,36 @@ import User, {
   UserStatus,
   USER_STATUS_LABELS,
 } from './user.model';
+import {
+  AuthenticatedUserRequest,
+  normalizeRoleValue,
+  roleHasPermission,
+  UserPermission,
+} from './user.permissions';
 
-type AuthRequest = Request & {
-  user?: {
-    id?: string;
-    _id?: string;
-    userId?: string;
-    role?: string;
-  };
-};
+type AuthRequest = AuthenticatedUserRequest & Request;
 
 const SAFE_USER_SELECT =
-  'firstName lastName fullName username email phone role roleLabel status statusLabel isActive profile managerId language direction lastLoginAt createdAt updatedAt createdBy updatedBy';
+  'firstName lastName fullName username email phone role roleLabel status statusLabel isActive profile managerId language direction lastLoginAt createdAt updatedAt createdBy updatedBy telegramUserId telegramChatId telegramUsername';
 
 const getAuthUserId = (req: AuthRequest): string => {
   return String(req.user?.id || req.user?._id || req.user?.userId || '');
 };
 
-const getAppRole = (req: AuthRequest): UserRole => {
-  const role = String(req.user?.role || '').toLowerCase();
-
-  if (role === 'manager' || role === 'admin') return UserRole.MANAGER;
-
-  return UserRole.EMPLOYEE;
+const getCurrentRole = (req: AuthRequest): UserRole => {
+  return (
+    req.authUser?.role ||
+    normalizeRoleValue(req.user?.role) ||
+    UserRole.EXPERT
+  );
 };
 
-const isManager = (req: AuthRequest): boolean => {
-  return getAppRole(req) === UserRole.MANAGER;
+const can = (req: AuthRequest, permission: UserPermission): boolean => {
+  return roleHasPermission(getCurrentRole(req), permission);
+};
+
+const canHaveManager = (role: UserRole): boolean => {
+  return role === UserRole.EXPERT;
 };
 
 const isValidObjectId = (value?: string): boolean => {
@@ -90,26 +93,13 @@ const sendSuccess = <T>(
 };
 
 const normalizeRole = (value: unknown): UserRole | null => {
-  if (!value || typeof value !== 'string') return null;
-
-  const normalized = value.trim().toLowerCase();
-
-  if (normalized === UserRole.MANAGER) return UserRole.MANAGER;
-  if (normalized === UserRole.EMPLOYEE) return UserRole.EMPLOYEE;
-
-  /**
-   * Legacy compatibility only.
-   * Old admin becomes manager.
-   */
-  if (normalized === 'admin') return UserRole.MANAGER;
-
-  return null;
+  return normalizeRoleValue(value);
 };
 
 const normalizeStatus = (value: unknown): UserStatus | null => {
   if (!value || typeof value !== 'string') return null;
 
-  const normalized = value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase().replace(/-/g, '_');
 
   if (normalized === UserStatus.ACTIVE) return UserStatus.ACTIVE;
   if (normalized === UserStatus.INACTIVE) return UserStatus.INACTIVE;
@@ -140,13 +130,24 @@ const normalizeProfile = (value: unknown) => {
 const toSafeUser = (user: UserDocument | null) => {
   if (!user) return null;
 
-  const raw = user.toObject();
+  const raw = user.toObject() as Record<string, any>;
 
   delete raw.passwordHash;
+
+  const normalizedRole = normalizeRole(raw.role) || UserRole.EXPERT;
+  const normalizedStatus = normalizeStatus(raw.status) || UserStatus.ACTIVE;
 
   return {
     id: raw._id?.toString(),
     ...raw,
+    role: normalizedRole,
+    roleLabel: USER_ROLE_LABELS[normalizedRole],
+    status: normalizedStatus,
+    statusLabel: USER_STATUS_LABELS[normalizedStatus],
+    isActive:
+      typeof raw.isActive === 'boolean'
+        ? raw.isActive
+        : normalizedStatus === UserStatus.ACTIVE,
   };
 };
 
@@ -174,33 +175,6 @@ export const listUsers = async (
     managerId,
   } = req.query;
 
-  const authUserId = getAuthUserId(req);
-
-  if (!isManager(req)) {
-    if (!isValidObjectId(authUserId)) {
-      sendForbidden(res);
-      return;
-    }
-
-    const currentUser = await User.findById(authUserId).select(SAFE_USER_SELECT);
-
-    sendSuccess(
-      res,
-      currentUser ? [toSafeUser(currentUser)] : [],
-      'اطلاعات کاربر جاری دریافت شد.',
-      200,
-      {
-        pagination: {
-          total: currentUser ? 1 : 0,
-          page: 1,
-          limit: 1,
-          totalPages: currentUser ? 1 : 0,
-        },
-      },
-    );
-    return;
-  }
-
   const pageNumber = Math.max(Number(page) || 1, 1);
   const limitNumber = Math.min(Math.max(Number(limit) || 20, 1), 100);
   const skip = (pageNumber - 1) * limitNumber;
@@ -226,7 +200,24 @@ export const listUsers = async (
       return;
     }
 
-    filter.role = normalizedRole;
+    /**
+     * Backward compatibility for old stored users.
+     */
+    if (normalizedRole === UserRole.EXPERT) {
+      filter.role = { $in: [UserRole.EXPERT, 'employee'] };
+    } else if (normalizedRole === UserRole.MANAGER) {
+      filter.role = {
+        $in: [
+          UserRole.MANAGER,
+          'admin',
+          'super_admin',
+          'project_owner',
+          'specialty_owner',
+        ],
+      };
+    } else {
+      filter.role = normalizedRole;
+    }
   }
 
   if (typeof status === 'string' && status.trim()) {
@@ -287,7 +278,7 @@ export const getUserById = async (
     return;
   }
 
-  if (!isManager(req) && id !== authUserId) {
+  if (!can(req, UserPermission.USERS_READ) && id !== authUserId) {
     sendForbidden(res);
     return;
   }
@@ -327,7 +318,7 @@ export const createUser = async (
   req: AuthRequest,
   res: Response,
 ): Promise<void> => {
-  if (!isManager(req)) {
+  if (!can(req, UserPermission.USERS_CREATE)) {
     sendForbidden(res);
     return;
   }
@@ -380,14 +371,21 @@ export const createUser = async (
     return;
   }
 
-  const normalizedRole = normalizeRole(role) || UserRole.EMPLOYEE;
+  const normalizedRole = normalizeRole(role) || UserRole.EXPERT;
+
+  if (!can(req, UserPermission.ROLES_MANAGE)) {
+    sendForbidden(res);
+    return;
+  }
+
   const normalizedStatus = normalizeStatus(status) || UserStatus.ACTIVE;
 
   let normalizedManagerId: Types.ObjectId | null = null;
 
   try {
-    normalizedManagerId =
-      normalizedRole === UserRole.EMPLOYEE ? validateManagerId(managerId) : null;
+    normalizedManagerId = canHaveManager(normalizedRole)
+      ? validateManagerId(managerId)
+      : null;
   } catch (error) {
     sendValidationError(
       res,
@@ -462,8 +460,9 @@ export const updateUser = async (
   }
 
   const isSelfUpdate = id === authUserId;
+  const canUpdateUsers = can(req, UserPermission.USERS_UPDATE);
 
-  if (!isManager(req) && !isSelfUpdate) {
+  if (!canUpdateUsers && !isSelfUpdate) {
     sendForbidden(res);
     return;
   }
@@ -473,6 +472,27 @@ export const updateUser = async (
   if (!existingUser) {
     sendNotFound(res);
     return;
+  }
+
+  if (!canUpdateUsers && isSelfUpdate) {
+    const forbiddenSelfFields = [
+      'username',
+      'email',
+      'role',
+      'status',
+      'managerId',
+      'password',
+      'telegramUserId',
+      'telegramChatId',
+      'telegramUsername',
+    ];
+
+    const hasForbiddenSelfField = forbiddenSelfFields.some((field) => field in req.body);
+
+    if (hasForbiddenSelfField) {
+      sendForbidden(res);
+      return;
+    }
   }
 
   const update: Record<string, unknown> = {
@@ -505,7 +525,7 @@ export const updateUser = async (
     update.profile = normalizeProfile(req.body.profile);
   }
 
-  if (isManager(req)) {
+  if (canUpdateUsers) {
     if ('username' in req.body) {
       if (!req.body.username || typeof req.body.username !== 'string') {
         sendValidationError(res, 'نام کاربری معتبر نیست.');
@@ -525,6 +545,11 @@ export const updateUser = async (
     }
 
     if ('role' in req.body) {
+      if (!can(req, UserPermission.ROLES_MANAGE)) {
+        sendForbidden(res);
+        return;
+      }
+
       const normalizedRole = normalizeRole(req.body.role);
 
       if (!normalizedRole) {
@@ -535,7 +560,7 @@ export const updateUser = async (
       update.role = normalizedRole;
       update.roleLabel = USER_ROLE_LABELS[normalizedRole];
 
-      if (normalizedRole === UserRole.MANAGER) {
+      if (!canHaveManager(normalizedRole)) {
         update.managerId = null;
       }
     }
@@ -556,16 +581,13 @@ export const updateUser = async (
     if ('managerId' in req.body) {
       try {
         const targetRole =
-          update.role === UserRole.MANAGER
-            ? UserRole.MANAGER
-            : update.role === UserRole.EMPLOYEE
-              ? UserRole.EMPLOYEE
-              : existingUser.role;
+          typeof update.role === 'string'
+            ? normalizeRole(update.role) || normalizeRole(existingUser.role) || UserRole.EXPERT
+            : normalizeRole(existingUser.role) || UserRole.EXPERT;
 
-        update.managerId =
-          targetRole === UserRole.MANAGER
-            ? null
-            : validateManagerId(req.body.managerId);
+        update.managerId = canHaveManager(targetRole)
+          ? validateManagerId(req.body.managerId)
+          : null;
       } catch (error) {
         sendValidationError(
           res,
@@ -583,11 +605,34 @@ export const updateUser = async (
 
       update.passwordHash = await bcrypt.hash(req.body.password, 12);
     }
+
+    if ('telegramUserId' in req.body) {
+      update.telegramUserId =
+        typeof req.body.telegramUserId === 'string'
+          ? req.body.telegramUserId.trim()
+          : '';
+    }
+
+    if ('telegramChatId' in req.body) {
+      update.telegramChatId =
+        typeof req.body.telegramChatId === 'string'
+          ? req.body.telegramChatId.trim()
+          : '';
+    }
+
+    if ('telegramUsername' in req.body) {
+      update.telegramUsername =
+        typeof req.body.telegramUsername === 'string'
+          ? req.body.telegramUsername.trim().replace(/^@/, '').toLowerCase()
+          : '';
+    }
   }
 
   if ('firstName' in update || 'lastName' in update) {
     const firstName =
-      typeof update.firstName === 'string' ? update.firstName : existingUser.firstName;
+      typeof update.firstName === 'string'
+        ? update.firstName
+        : existingUser.firstName;
 
     const lastName =
       typeof update.lastName === 'string' ? update.lastName : existingUser.lastName;
@@ -619,27 +664,6 @@ export const updateUser = async (
     }
   }
 
-  if (isManager(req) && 'telegramUserId' in req.body) {
-    update.telegramUserId =
-      typeof req.body.telegramUserId === 'string'
-        ? req.body.telegramUserId.trim()
-        : '';
-  }
-
-  if (isManager(req) && 'telegramChatId' in req.body) {
-    update.telegramChatId =
-      typeof req.body.telegramChatId === 'string'
-        ? req.body.telegramChatId.trim()
-        : '';
-  }
-
-  if (isManager(req) && 'telegramUsername' in req.body) {
-    update.telegramUsername =
-      typeof req.body.telegramUsername === 'string'
-        ? req.body.telegramUsername.trim().replace(/^@/, '').toLowerCase()
-        : '';
-  }
-
   const updatedUser = await User.findByIdAndUpdate(id, update, {
     new: true,
     runValidators: true,
@@ -652,7 +676,7 @@ export const deleteUser = async (
   req: AuthRequest,
   res: Response,
 ): Promise<void> => {
-  if (!isManager(req)) {
+  if (!can(req, UserPermission.USERS_DEACTIVATE)) {
     sendForbidden(res);
     return;
   }
@@ -666,7 +690,7 @@ export const deleteUser = async (
   }
 
   if (id === authUserId) {
-    sendValidationError(res, 'مدیر نمی‌تواند حساب خودش را حذف کند.');
+    sendValidationError(res, 'کاربر نمی‌تواند حساب خودش را غیرفعال کند.');
     return;
   }
 

@@ -7,6 +7,8 @@ import healthRoutes from '@/modules/health/health.routes';
 import projectRoutes from '@/modules/projects/project.routes';
 import userRoutes from '@/modules/users/user.routes';
 import telegramRoutes from '@/modules/telegram/telegram.routes';
+import projectRoleRoutes from './project-roles/project-role.routes';
+import projectOverviewRoutes from './project-overview/project-overview.routes';
 
 export function registerModules(): Router {
   const router = Router();
@@ -28,6 +30,8 @@ export function registerModules(): Router {
   router.use('/users', userRoutes);
   router.use('/projects', projectRoutes);
   router.use('/telegram', telegramRoutes);
+  router.use('/project-roles', projectRoleRoutes);
+  router.use('/project-overview', projectOverviewRoutes);
 
   return router;
 }
