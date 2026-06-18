@@ -1,5 +1,5 @@
-// test
 import dotenv from 'dotenv';
+// for test
 
 dotenv.config();
 
