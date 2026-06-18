@@ -1,49 +1,28 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
-import { ProjectTaskModel } from './project-task.model';
-import { ProjectFileModel } from './project-file.model';
+import {
+  ProjectFile,
+  ProjectFileCategory,
+  PROJECT_FILE_CATEGORY_LABELS,
+  ProjectTask,
+} from './project.model';
 import { transcribeAudioFile } from './audio-transcription.service';
 
-const isValidObjectId = (value?: string) => {
+type AuthRequest = Request & {
+  files?: Express.Multer.File[];
+  user?: {
+    id?: string;
+    _id?: string;
+    userId?: string;
+  };
+};
+
+const isValidObjectId = (value?: string): boolean => {
   return Boolean(value && mongoose.Types.ObjectId.isValid(value));
 };
 
-const getCurrentUserId = (req: Request): string | null => {
-  const requestWithUser = req as Request & {
-    user?: {
-      id?: string;
-      _id?: string;
-    };
-  };
-
-  return requestWithUser.user?.id || requestWithUser.user?._id || null;
-};
-
-const parseDate = (value?: string | null) => {
-  if (!value) return null;
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return null;
-
-  return date;
-};
-
-const normalizeAssignedUserIds = (value: unknown): string[] => {
-  if (!value) return [];
-
-  if (Array.isArray(value)) {
-    return value.map(String).filter(isValidObjectId);
-  }
-
-  if (typeof value === 'string') {
-    return value
-      .split(',')
-      .map((item) => item.trim())
-      .filter(isValidObjectId);
-  }
-
-  return [];
+const getCurrentUserId = (req: AuthRequest): string | null => {
+  return req.user?.id || req.user?._id || req.user?.userId || null;
 };
 
 const populateTask = () => {
@@ -63,31 +42,6 @@ const populateTask = () => {
   ];
 };
 
-const formatTaskWithFiles = async (task: any) => {
-  const taskObject = task.toObject ? task.toObject() : task;
-  const taskId = String(taskObject._id);
-
-  const files = await ProjectFileModel.find({
-    taskId: taskObject._id,
-  })
-    .populate(
-      'uploadedBy',
-      'firstName lastName fullName username email role isActive telegramChatId',
-    )
-    .sort({ createdAt: -1 })
-    .lean();
-
-  return {
-    ...taskObject,
-    id: taskId,
-    files: files.map((file) => ({
-      ...file,
-      id: String(file._id),
-    })),
-    attachmentCount: files.length,
-  };
-};
-
 const buildProjectUploadFileUrl = (fileName: string): string => {
   return `/api/v1/uploads/projects/${fileName}`;
 };
@@ -105,8 +59,33 @@ const buildTranscriptionFields = async (file: Express.Multer.File) => {
   };
 };
 
+const formatTaskWithFiles = async (task: any) => {
+  const taskObject = task.toObject ? task.toObject() : task;
+  const taskId = String(taskObject._id);
+
+  const files = await ProjectFile.find({
+    taskId: taskObject._id,
+  })
+    .populate(
+      'uploadedBy',
+      'firstName lastName fullName username email role isActive telegramChatId',
+    )
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return {
+    ...taskObject,
+    id: taskId,
+    files: files.map((file: any) => ({
+      ...file,
+      id: String(file._id),
+    })),
+    attachmentCount: files.length,
+  };
+};
+
 const createTaskFiles = async (
-  req: Request,
+  req: AuthRequest,
   projectId: string,
   taskId: string,
 ) => {
@@ -115,7 +94,6 @@ const createTaskFiles = async (
 
   if (!files.length) {
     return {
-      records: [],
       completedTranscriptText: '',
     };
   }
@@ -124,7 +102,7 @@ const createTaskFiles = async (
     files.map(async (file) => {
       const transcriptionFields = await buildTranscriptionFields(file);
 
-      const record = await ProjectFileModel.create({
+      return ProjectFile.create({
         projectId: new mongoose.Types.ObjectId(projectId),
         taskId: new mongoose.Types.ObjectId(taskId),
         progressNoteId: null,
@@ -137,12 +115,11 @@ const createTaskFiles = async (
         fileUrl: buildProjectUploadFileUrl(file.filename),
         fileType: file.mimetype,
         fileSize: file.size,
-        category: 'task_attachment',
-        categoryLabel: 'پیوست وظیفه',
+        category: ProjectFileCategory.TASK_ATTACHMENT,
+        categoryLabel:
+          PROJECT_FILE_CATEGORY_LABELS[ProjectFileCategory.TASK_ATTACHMENT],
         ...transcriptionFields,
       });
-
-      return record;
     }),
   );
 
@@ -152,262 +129,62 @@ const createTaskFiles = async (
     .join('\n\n');
 
   return {
-    records,
     completedTranscriptText,
   };
 };
 
-export const projectTaskController = {
-  async listTasks(req: Request, res: Response) {
-    const { projectId } = req.params;
+export const uploadProjectTaskFiles = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  const { id: projectId, taskId } = req.params;
 
-    if (!isValidObjectId(projectId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'شناسه پروژه معتبر نیست.',
-        code: 'INVALID_PROJECT_ID',
-      });
-    }
-
-    const tasks = await ProjectTaskModel.find({ projectId })
-      .populate(populateTask())
-      .sort({ createdAt: -1 });
-
-    const data = await Promise.all(tasks.map(formatTaskWithFiles));
-
-    return res.json({
-      success: true,
-      data,
+  if (!isValidObjectId(projectId) || !isValidObjectId(taskId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'شناسه پروژه یا وظیفه معتبر نیست.',
+      code: 'INVALID_ID',
     });
-  },
+  }
 
-  async createTask(req: Request, res: Response) {
-    const { projectId } = req.params;
-    const {
-      title,
-      description,
-      assignedUserIds,
-      status,
-      priority,
-      startDate,
-      dueDate,
-    } = req.body;
+  const task = await ProjectTask.findOne({ _id: taskId, projectId });
 
-    if (!isValidObjectId(projectId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'شناسه پروژه معتبر نیست.',
-        code: 'INVALID_PROJECT_ID',
-      });
-    }
-
-    if (!title || !String(title).trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'عنوان وظیفه الزامی است.',
-        code: 'VALIDATION_ERROR',
-      });
-    }
-
-    const currentUserId = getCurrentUserId(req);
-    const nextStatus = status || 'todo';
-
-    const task = await ProjectTaskModel.create({
-      projectId,
-      title: String(title).trim(),
-      description: description ? String(description).trim() : '',
-      assignedUserIds: normalizeAssignedUserIds(assignedUserIds),
-      status: nextStatus,
-      priority: priority || 'medium',
-      startDate: parseDate(startDate),
-      dueDate: parseDate(dueDate),
-      completedAt: nextStatus === 'done' ? new Date() : null,
-      createdBy: currentUserId,
-      updatedBy: currentUserId,
+  if (!task) {
+    return res.status(404).json({
+      success: false,
+      message: 'وظیفه پیدا نشد.',
+      code: 'TASK_NOT_FOUND',
     });
+  }
 
-    const populatedTask = await ProjectTaskModel.findById(task._id).populate(
-      populateTask(),
-    );
+  const files = (req.files || []) as Express.Multer.File[];
 
-    return res.status(201).json({
-      success: true,
-      message: 'وظیفه با موفقیت ایجاد شد.',
-      data: await formatTaskWithFiles(populatedTask),
+  if (!files.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'هیچ فایلی ارسال نشده است.',
+      code: 'NO_FILES',
     });
-  },
+  }
 
-  async updateTask(req: Request, res: Response) {
-    const { projectId, taskId } = req.params;
+  const { completedTranscriptText } = await createTaskFiles(
+    req,
+    projectId,
+    taskId,
+  );
 
-    if (!isValidObjectId(projectId) || !isValidObjectId(taskId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'شناسه پروژه یا وظیفه معتبر نیست.',
-        code: 'INVALID_ID',
-      });
-    }
-
-    const task = await ProjectTaskModel.findOne({ _id: taskId, projectId });
-
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: 'وظیفه پیدا نشد.',
-        code: 'TASK_NOT_FOUND',
-      });
-    }
-
-    const previousStatus = task.status;
-    const nextStatus = req.body.status || task.status;
-
-    if (req.body.title !== undefined) {
-      if (!String(req.body.title).trim()) {
-        return res.status(400).json({
-          success: false,
-          message: 'عنوان وظیفه الزامی است.',
-          code: 'VALIDATION_ERROR',
-        });
-      }
-
-      task.title = String(req.body.title).trim();
-    }
-
-    if (req.body.description !== undefined) {
-      task.description = String(req.body.description || '').trim();
-    }
-
-    if (req.body.assignedUserIds !== undefined) {
-      task.assignedUserIds = normalizeAssignedUserIds(req.body.assignedUserIds).map(
-        (id) => new mongoose.Types.ObjectId(id),
-      );
-    }
-
-    if (req.body.priority !== undefined) {
-      task.priority = req.body.priority;
-    }
-
-    if (req.body.status !== undefined) {
-      task.status = req.body.status;
-    }
-
-    if (req.body.startDate !== undefined) {
-      task.startDate = parseDate(req.body.startDate);
-    }
-
-    if (req.body.dueDate !== undefined) {
-      task.dueDate = parseDate(req.body.dueDate);
-    }
-
-    if (nextStatus === 'done' && previousStatus !== 'done') {
-      task.completedAt = new Date();
-    }
-
-    if (nextStatus !== 'done') {
-      task.completedAt = null;
-    }
-
-    const currentUserId = getCurrentUserId(req);
-
-    if (currentUserId && isValidObjectId(currentUserId)) {
-      task.updatedBy = new mongoose.Types.ObjectId(currentUserId);
-    }
-
+  if (!String(task.description || '').trim() && completedTranscriptText) {
+    task.description = completedTranscriptText;
     await task.save();
+  }
 
-    const populatedTask = await ProjectTaskModel.findById(task._id).populate(
-      populateTask(),
-    );
+  const populatedTask = await ProjectTask.findById(task._id).populate(
+    populateTask(),
+  );
 
-    return res.json({
-      success: true,
-      message: 'وظیفه با موفقیت ویرایش شد.',
-      data: await formatTaskWithFiles(populatedTask),
-    });
-  },
-
-  async uploadTaskFiles(req: Request, res: Response) {
-    const { projectId, taskId } = req.params;
-
-    if (!isValidObjectId(projectId) || !isValidObjectId(taskId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'شناسه پروژه یا وظیفه معتبر نیست.',
-        code: 'INVALID_ID',
-      });
-    }
-
-    const task = await ProjectTaskModel.findOne({ _id: taskId, projectId });
-
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: 'وظیفه پیدا نشد.',
-        code: 'TASK_NOT_FOUND',
-      });
-    }
-
-    const files = (req.files || []) as Express.Multer.File[];
-
-    if (!files.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'هیچ فایلی ارسال نشده است.',
-        code: 'NO_FILES',
-      });
-    }
-
-    const { completedTranscriptText } = await createTaskFiles(
-      req,
-      projectId,
-      taskId,
-    );
-
-    if (!String(task.description || '').trim() && completedTranscriptText) {
-      task.description = completedTranscriptText;
-      await task.save();
-    }
-
-    const populatedTask = await ProjectTaskModel.findById(task._id).populate(
-      populateTask(),
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: 'فایل‌های وظیفه با موفقیت ارسال شد.',
-      data: await formatTaskWithFiles(populatedTask),
-    });
-  },
-
-  async deleteTask(req: Request, res: Response) {
-    const { projectId, taskId } = req.params;
-
-    if (!isValidObjectId(projectId) || !isValidObjectId(taskId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'شناسه پروژه یا وظیفه معتبر نیست.',
-        code: 'INVALID_ID',
-      });
-    }
-
-    const task = await ProjectTaskModel.findOneAndDelete({
-      _id: taskId,
-      projectId,
-    });
-
-    if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: 'وظیفه پیدا نشد.',
-        code: 'TASK_NOT_FOUND',
-      });
-    }
-
-    await ProjectFileModel.deleteMany({ taskId });
-
-    return res.json({
-      success: true,
-      message: 'وظیفه با موفقیت حذف شد.',
-    });
-  },
+  return res.status(201).json({
+    success: true,
+    message: 'فایل‌های وظیفه با موفقیت ارسال شد.',
+    data: await formatTaskWithFiles(populatedTask),
+  });
 };
