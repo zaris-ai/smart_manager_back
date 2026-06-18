@@ -19,6 +19,7 @@ import {
   listProjectTasks,
   removeUserFromProject,
   updateProject,
+  updateProjectMember,
   updateProjectTask,
 } from '@/modules/projects/project.controller';
 import { importProjectsFromExcel } from '@/modules/projects/project-import.controller';
@@ -84,9 +85,10 @@ router.patch('/:id', routeHandler(updateProject));
 router.delete('/:id', routeHandler(archiveProject));
 
 /**
- * Project users
+ * Project members
  */
 router.post('/:id/users', routeHandler(assignUsersToProject));
+router.patch('/:id/users/:userId', routeHandler(updateProjectMember));
 router.delete('/:id/users/:userId', routeHandler(removeUserFromProject));
 
 /**

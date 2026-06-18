@@ -8,38 +8,95 @@ import {
 } from './project.model';
 import { transcribeAudioFile } from './audio-transcription.service';
 
-type AuthRequest = Request & {
-  files?: Express.Multer.File[];
+type RequestWithUserAndFiles = Request & {
   user?: {
     id?: string;
     _id?: string;
     userId?: string;
   };
+  files?: Express.Multer.File[] | Record<string, Express.Multer.File[]>;
 };
 
-const isValidObjectId = (value?: string): boolean => {
-  return Boolean(value && mongoose.Types.ObjectId.isValid(value));
+const isValidObjectId = (value: unknown): boolean => {
+  return typeof value === 'string' && mongoose.Types.ObjectId.isValid(value);
 };
 
-const getCurrentUserId = (req: AuthRequest): string | null => {
-  return req.user?.id || req.user?._id || req.user?.userId || null;
+const getProjectIdFromParams = (req: Request): string | undefined => {
+  return req.params.id || req.params.projectId;
+};
+
+const getCurrentUserId = (req: Request): string | null => {
+  const requestWithUser = req as RequestWithUserAndFiles;
+
+  return (
+    requestWithUser.user?.id ||
+    requestWithUser.user?._id ||
+    requestWithUser.user?.userId ||
+    null
+  );
+};
+
+const getUploadedFiles = (req: Request): Express.Multer.File[] => {
+  const requestWithFiles = req as RequestWithUserAndFiles;
+  const files = requestWithFiles.files;
+
+  if (!files) {
+    return [];
+  }
+
+  if (Array.isArray(files)) {
+    return files;
+  }
+
+  return Object.values(files).flat();
 };
 
 const populateTask = () => {
   return [
     {
       path: 'assignedUserIds',
-      select: 'firstName lastName fullName username email role isActive telegramChatId',
+      select:
+        'firstName lastName fullName username email role isActive telegramChatId',
     },
     {
       path: 'createdBy',
-      select: 'firstName lastName fullName username email role isActive telegramChatId',
+      select:
+        'firstName lastName fullName username email role isActive telegramChatId',
     },
     {
       path: 'updatedBy',
-      select: 'firstName lastName fullName username email role isActive telegramChatId',
+      select:
+        'firstName lastName fullName username email role isActive telegramChatId',
     },
   ];
+};
+
+const formatTaskWithFiles = async (task: any) => {
+  const taskObject = task?.toObject ? task.toObject() : task;
+
+  if (!taskObject) {
+    return null;
+  }
+
+  const files = await ProjectFile.find({
+    taskId: taskObject._id,
+  })
+    .populate(
+      'uploadedBy',
+      'firstName lastName fullName username email role isActive telegramChatId',
+    )
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return {
+    ...taskObject,
+    id: String(taskObject._id),
+    files: files.map((file: any) => ({
+      ...file,
+      id: String(file._id),
+    })),
+    attachmentCount: files.length,
+  };
 };
 
 const buildProjectUploadFileUrl = (fileName: string): string => {
@@ -59,37 +116,12 @@ const buildTranscriptionFields = async (file: Express.Multer.File) => {
   };
 };
 
-const formatTaskWithFiles = async (task: any) => {
-  const taskObject = task.toObject ? task.toObject() : task;
-  const taskId = String(taskObject._id);
-
-  const files = await ProjectFile.find({
-    taskId: taskObject._id,
-  })
-    .populate(
-      'uploadedBy',
-      'firstName lastName fullName username email role isActive telegramChatId',
-    )
-    .sort({ createdAt: -1 })
-    .lean();
-
-  return {
-    ...taskObject,
-    id: taskId,
-    files: files.map((file: any) => ({
-      ...file,
-      id: String(file._id),
-    })),
-    attachmentCount: files.length,
-  };
-};
-
 const createTaskFiles = async (
-  req: AuthRequest,
+  req: Request,
   projectId: string,
   taskId: string,
 ) => {
-  const files = (req.files || []) as Express.Multer.File[];
+  const files = getUploadedFiles(req);
   const uploadedBy = getCurrentUserId(req);
 
   if (!files.length) {
@@ -99,7 +131,7 @@ const createTaskFiles = async (
   }
 
   const records = await Promise.all(
-    files.map(async (file) => {
+    files.map(async (file: Express.Multer.File) => {
       const transcriptionFields = await buildTranscriptionFields(file);
 
       return ProjectFile.create({
@@ -133,11 +165,9 @@ const createTaskFiles = async (
   };
 };
 
-export const uploadProjectTaskFiles = async (
-  req: AuthRequest,
-  res: Response,
-) => {
-  const { id: projectId, taskId } = req.params;
+export const uploadProjectTaskFiles = async (req: Request, res: Response) => {
+  const projectId = getProjectIdFromParams(req);
+  const { taskId } = req.params;
 
   if (!isValidObjectId(projectId) || !isValidObjectId(taskId)) {
     return res.status(400).json({
@@ -147,7 +177,13 @@ export const uploadProjectTaskFiles = async (
     });
   }
 
-  const task = await ProjectTask.findOne({ _id: taskId, projectId });
+  const safeProjectId = String(projectId);
+  const safeTaskId = String(taskId);
+
+  const task = await ProjectTask.findOne({
+    _id: safeTaskId,
+    projectId: safeProjectId,
+  });
 
   if (!task) {
     return res.status(404).json({
@@ -157,7 +193,7 @@ export const uploadProjectTaskFiles = async (
     });
   }
 
-  const files = (req.files || []) as Express.Multer.File[];
+  const files = getUploadedFiles(req);
 
   if (!files.length) {
     return res.status(400).json({
@@ -169,8 +205,8 @@ export const uploadProjectTaskFiles = async (
 
   const { completedTranscriptText } = await createTaskFiles(
     req,
-    projectId,
-    taskId,
+    safeProjectId,
+    safeTaskId,
   );
 
   if (!String(task.description || '').trim() && completedTranscriptText) {
