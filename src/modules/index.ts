@@ -9,6 +9,7 @@ import userRoutes from '@/modules/users/user.routes';
 import telegramRoutes from '@/modules/telegram/telegram.routes';
 import projectRoleRoutes from './project-roles/project-role.routes';
 import projectOverviewRoutes from './project-overview/project-overview.routes';
+import projectFinanceRoutes from './project-finance/project-finance.routes';
 
 export function registerModules(): Router {
   const router = Router();
@@ -28,6 +29,9 @@ export function registerModules(): Router {
   router.use('/alerts', alertRoutes);
   router.use('/dashboard', dashboardRoutes);
   router.use('/users', userRoutes);
+
+  router.use('/projects/:projectId/finance', projectFinanceRoutes);
+
   router.use('/projects', projectRoutes);
   router.use('/telegram', telegramRoutes);
   router.use('/project-roles', projectRoleRoutes);

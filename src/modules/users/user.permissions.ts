@@ -16,6 +16,13 @@ export enum UserPermission {
   PROJECTS_UPDATE = 'projects.update',
   PROJECTS_MANAGE = 'projects.manage',
 
+  FINANCE_READ = 'finance.read',
+  FINANCE_CREATE = 'finance.create',
+  FINANCE_UPDATE = 'finance.update',
+  FINANCE_APPROVE = 'finance.approve',
+  FINANCE_DELETE = 'finance.delete',
+  FINANCE_REPORT = 'finance.report',
+
   REPORTS_READ = 'reports.read',
   REPORTS_CREATE = 'reports.create',
   REPORTS_REVIEW = 'reports.review',
@@ -71,6 +78,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, UserPermission[]> = {
   [UserRole.BOARD]: [
     UserPermission.USERS_READ,
     UserPermission.PROJECTS_READ,
+    UserPermission.FINANCE_READ,
+    UserPermission.FINANCE_REPORT,
     UserPermission.REPORTS_READ,
     UserPermission.CONTRACTS_READ,
     UserPermission.EVIDENCE_READ,
@@ -90,6 +99,13 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, UserPermission[]> = {
     UserPermission.PROJECTS_CREATE,
     UserPermission.PROJECTS_UPDATE,
     UserPermission.PROJECTS_MANAGE,
+
+    UserPermission.FINANCE_READ,
+    UserPermission.FINANCE_CREATE,
+    UserPermission.FINANCE_UPDATE,
+    UserPermission.FINANCE_APPROVE,
+    UserPermission.FINANCE_DELETE,
+    UserPermission.FINANCE_REPORT,
 
     UserPermission.REPORTS_READ,
     UserPermission.REPORTS_CREATE,
@@ -117,6 +133,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, UserPermission[]> = {
 
   [UserRole.EXPERT]: [
     UserPermission.PROJECTS_READ,
+    UserPermission.FINANCE_READ,
+    UserPermission.FINANCE_CREATE,
     UserPermission.REPORTS_CREATE,
     UserPermission.EVIDENCE_CREATE,
     UserPermission.RISKS_READ,
