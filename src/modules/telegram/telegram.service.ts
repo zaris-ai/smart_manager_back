@@ -14,6 +14,28 @@ type TelegramApiResponse<T = unknown> = {
   result?: T;
 };
 
+export type TelegramBotIdentity = {
+  id: number;
+  is_bot: boolean;
+  first_name: string;
+  username?: string;
+  can_join_groups?: boolean;
+  can_read_all_group_messages?: boolean;
+  supports_inline_queries?: boolean;
+};
+
+export type TelegramWebhookInfo = {
+  url: string;
+  has_custom_certificate?: boolean;
+  pending_update_count?: number;
+  ip_address?: string;
+  last_error_date?: number;
+  last_error_message?: string;
+  last_synchronization_error_date?: number;
+  max_connections?: number;
+  allowed_updates?: string[];
+};
+
 export const escapeTelegramHtml = (value: unknown): string => {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -150,4 +172,43 @@ export const downloadTelegramFile = async (
   const arrayBuffer = await response.arrayBuffer();
 
   return Buffer.from(arrayBuffer);
+};
+
+export const getTelegramBotIdentity = async (): Promise<TelegramBotIdentity> => {
+  return telegramRequest<TelegramBotIdentity>('getMe');
+};
+
+export const getTelegramWebhookInfo = async (): Promise<TelegramWebhookInfo> => {
+  return telegramRequest<TelegramWebhookInfo>('getWebhookInfo');
+};
+
+export const setTelegramWebhook = async (input: {
+  url: string;
+  secretToken?: string;
+  dropPendingUpdates?: boolean;
+}): Promise<boolean> => {
+  return telegramRequest<boolean>('setWebhook', {
+    url: input.url,
+    allowed_updates: ['message', 'callback_query'],
+    drop_pending_updates: input.dropPendingUpdates ?? false,
+    ...(input.secretToken ? { secret_token: input.secretToken } : {}),
+  });
+};
+
+export const deleteTelegramWebhook = async (
+  dropPendingUpdates = false,
+): Promise<boolean> => {
+  return telegramRequest<boolean>('deleteWebhook', {
+    drop_pending_updates: dropPendingUpdates,
+  });
+};
+
+
+export const setTelegramBotCommands = async (
+  commands: Array<{ command: string; description: string }>,
+): Promise<boolean> => {
+  return telegramRequest<boolean>('setMyCommands', {
+    commands,
+    language_code: 'fa',
+  });
 };

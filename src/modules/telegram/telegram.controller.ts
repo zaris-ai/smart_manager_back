@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import TelegramTaskSession from './telegram-task-session.model';
+import TelegramBotSession from './telegram-bot-session.model';
 import { telegramTaskBotService } from './telegram-task-bot.service';
 import { handleTelegramWebhook as handlePreviousTelegramWebhook } from './telegram-bot.controller';
 
@@ -25,11 +26,29 @@ type TelegramUpdate = {
     callback_query?: TelegramCallbackQuery;
 };
 
+
+const BOT_TEXT_COMMANDS = new Set([
+    '/start',
+    '/summary',
+    '/projects',
+    '/report',
+    '/staffing',
+    'شروع',
+    'راهنما',
+    'شروع / راهنما',
+    'خلاصه مدیریتی',
+    'پروژه‌های من',
+    'پروژه‌ها',
+    'ثبت گزارش پروژه',
+    'پروژه‌های نیازمند تخصیص',
+]);
+
 const TASK_TEXT_COMMANDS = new Set([
     '/task',
     '/newtask',
     'ثبت وظیفه',
     'تعریف وظیفه',
+    // Legacy label kept only for backward compatibility with old keyboards.
     'ثبت وظیفه برای مدیران',
     '/tasks',
     '/mytasks',
@@ -82,8 +101,16 @@ const isTaskUpdate = async (update: TelegramUpdate): Promise<boolean> => {
         return true;
     }
 
-    if (callbackData.startsWith('task:')) {
-        return true;
+    if (callbackData) {
+        return callbackData.startsWith('task:');
+    }
+
+    if (
+        BOT_TEXT_COMMANDS.has(text) ||
+        /^\/link(?:@[a-z0-9_]+)?(?:\s|$)/i.test(text) ||
+        /^\/start(?:@[a-z0-9_]+)?\s+link_/i.test(text)
+    ) {
+        return false;
     }
 
     if (messageHasAttachment(update.message)) {
@@ -120,6 +147,27 @@ export const telegramWebhook = async (
     const update = req.body as TelegramUpdate;
 
     try {
+        const chatId = getChatIdFromUpdate(update);
+        const text = getTextFromUpdate(update);
+        const callbackData = getCallbackDataFromUpdate(update);
+
+        const isLinkCommand = /^\/link(?:@[a-z0-9_]+)?(?:\s|$)/i.test(text) ||
+            /^\/start(?:@[a-z0-9_]+)?\s+link_/i.test(text);
+
+        if (
+            chatId &&
+            (BOT_TEXT_COMMANDS.has(text) || isLinkCommand || callbackData.startsWith('bot:'))
+        ) {
+            await TelegramTaskSession.deleteMany({ chatId } as any);
+        }
+
+        if (
+            chatId &&
+            (TASK_TEXT_COMMANDS.has(text) || callbackData.startsWith('task:'))
+        ) {
+            await TelegramBotSession.deleteMany({ telegramChatId: chatId } as any);
+        }
+
         const shouldUseTaskBot = await isTaskUpdate(update);
 
         if (shouldUseTaskBot) {

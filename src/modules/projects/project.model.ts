@@ -1,101 +1,102 @@
 // src/modules/projects/project.model.ts
 
-import mongoose, { Document, Model, Schema, Types } from 'mongoose';
+import mongoose, { Document, Model, Schema, Types } from "mongoose";
 
 export enum ProjectStatus {
-  NEGOTIATING = 'negotiating',
-  PROPOSAL_DRAFTING = 'proposal_drafting',
-  CONTRACT_SIGNING = 'contract_signing',
-  PLANNING = 'planning',
-  ACTIVE = 'active',
-  ON_HOLD = 'on_hold',
-  COMPLETED = 'completed',
-  CANCELLED = 'cancelled',
+  NEGOTIATING = "negotiating",
+  PROPOSAL_DRAFTING = "proposal_drafting",
+  CONTRACT_SIGNING = "contract_signing",
+  PLANNING = "planning",
+  ACTIVE = "active",
+  ON_HOLD = "on_hold",
+  COMPLETED = "completed",
+  CANCELLED = "cancelled",
 }
 
 export enum ProjectPriority {
-  LOW = 'low',
-  MEDIUM = 'medium',
-  HIGH = 'high',
-  CRITICAL = 'critical',
+  LOW = "low",
+  MEDIUM = "medium",
+  HIGH = "high",
+  CRITICAL = "critical",
 }
 
 export enum ProjectTaskStatus {
-  TODO = 'todo',
-  IN_PROGRESS = 'in_progress',
-  BLOCKED = 'blocked',
-  DONE = 'done',
-  CANCELLED = 'cancelled',
+  TODO = "todo",
+  IN_PROGRESS = "in_progress",
+  BLOCKED = "blocked",
+  DONE = "done",
+  CANCELLED = "cancelled",
 }
 
 export enum ProjectFileCategory {
-  REQUIREMENTS = 'requirements',
-  CONTRACTS = 'contracts',
-  DESIGN = 'design',
-  REPORTS = 'reports',
-  MEETING_NOTES = 'meeting_notes',
-  DELIVERY = 'delivery',
-  TASK_ATTACHMENT = 'task_attachment',
-  OTHER = 'other',
+  REQUIREMENTS = "requirements",
+  CONTRACTS = "contracts",
+  DESIGN = "design",
+  REPORTS = "reports",
+  MEETING_NOTES = "meeting_notes",
+  DELIVERY = "delivery",
+  TASK_ATTACHMENT = "task_attachment",
+  OTHER = "other",
 }
 
 export enum ProjectCalendarEventType {
-  PROJECT_START = 'project_start',
-  PROJECT_DUE = 'project_due',
-  TASK_START = 'task_start',
-  TASK_DUE = 'task_due',
+  PROJECT_START = "project_start",
+  PROJECT_DUE = "project_due",
+  TASK_START = "task_start",
+  TASK_DUE = "task_due",
+  PHASE_START = "phase_start",
+  PHASE_END = "phase_end",
 }
 
 export enum ProjectSource {
-  WEB = 'web',
-  TELEGRAM_BOT = 'telegram_bot',
+  WEB = "web",
+  TELEGRAM_BOT = "telegram_bot",
 }
 
 export type ProjectFileTranscriptionStatus =
-  | 'not_applicable'
-  | 'completed'
-  | 'failed';
+  "not_applicable" | "completed" | "failed";
 
 export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
-  [ProjectStatus.NEGOTIATING]: 'در حال مذاکره',
-  [ProjectStatus.PROPOSAL_DRAFTING]: 'تدوین پروپوزال',
-  [ProjectStatus.CONTRACT_SIGNING]: 'عقد قرارداد',
-  [ProjectStatus.PLANNING]: 'برنامه‌ریزی',
-  [ProjectStatus.ACTIVE]: 'فعال',
-  [ProjectStatus.ON_HOLD]: 'متوقف موقت',
-  [ProjectStatus.COMPLETED]: 'تکمیل‌شده',
-  [ProjectStatus.CANCELLED]: 'لغوشده',
+  [ProjectStatus.NEGOTIATING]: "در حال مذاکره",
+  [ProjectStatus.PROPOSAL_DRAFTING]: "تدوین پروپوزال",
+  [ProjectStatus.CONTRACT_SIGNING]: "عقد قرارداد",
+  [ProjectStatus.PLANNING]: "برنامه‌ریزی",
+  [ProjectStatus.ACTIVE]: "فعال",
+  [ProjectStatus.ON_HOLD]: "متوقف موقت",
+  [ProjectStatus.COMPLETED]: "تکمیل‌شده",
+  [ProjectStatus.CANCELLED]: "لغوشده",
 };
 
 export const PROJECT_PRIORITY_LABELS: Record<ProjectPriority, string> = {
-  [ProjectPriority.LOW]: 'کم',
-  [ProjectPriority.MEDIUM]: 'متوسط',
-  [ProjectPriority.HIGH]: 'زیاد',
-  [ProjectPriority.CRITICAL]: 'بحرانی',
+  [ProjectPriority.LOW]: "کم",
+  [ProjectPriority.MEDIUM]: "متوسط",
+  [ProjectPriority.HIGH]: "زیاد",
+  [ProjectPriority.CRITICAL]: "بحرانی",
 };
 
 export const PROJECT_TASK_STATUS_LABELS: Record<ProjectTaskStatus, string> = {
-  [ProjectTaskStatus.TODO]: 'برای انجام',
-  [ProjectTaskStatus.IN_PROGRESS]: 'در حال انجام',
-  [ProjectTaskStatus.BLOCKED]: 'مسدود',
-  [ProjectTaskStatus.DONE]: 'انجام‌شده',
-  [ProjectTaskStatus.CANCELLED]: 'لغوشده',
+  [ProjectTaskStatus.TODO]: "برای انجام",
+  [ProjectTaskStatus.IN_PROGRESS]: "در حال انجام",
+  [ProjectTaskStatus.BLOCKED]: "مسدود",
+  [ProjectTaskStatus.DONE]: "انجام‌شده",
+  [ProjectTaskStatus.CANCELLED]: "لغوشده",
 };
 
-export const PROJECT_FILE_CATEGORY_LABELS: Record<ProjectFileCategory, string> = {
-  [ProjectFileCategory.REQUIREMENTS]: 'نیازمندی‌ها',
-  [ProjectFileCategory.CONTRACTS]: 'قراردادها',
-  [ProjectFileCategory.DESIGN]: 'طراحی',
-  [ProjectFileCategory.REPORTS]: 'گزارش‌ها',
-  [ProjectFileCategory.MEETING_NOTES]: 'صورت‌جلسه',
-  [ProjectFileCategory.DELIVERY]: 'تحویل',
-  [ProjectFileCategory.TASK_ATTACHMENT]: 'پیوست وظیفه',
-  [ProjectFileCategory.OTHER]: 'سایر',
-};
+export const PROJECT_FILE_CATEGORY_LABELS: Record<ProjectFileCategory, string> =
+  {
+    [ProjectFileCategory.REQUIREMENTS]: "نیازمندی‌ها",
+    [ProjectFileCategory.CONTRACTS]: "قراردادها",
+    [ProjectFileCategory.DESIGN]: "طراحی",
+    [ProjectFileCategory.REPORTS]: "گزارش‌ها",
+    [ProjectFileCategory.MEETING_NOTES]: "صورت‌جلسه",
+    [ProjectFileCategory.DELIVERY]: "تحویل",
+    [ProjectFileCategory.TASK_ATTACHMENT]: "پیوست وظیفه",
+    [ProjectFileCategory.OTHER]: "سایر",
+  };
 
 const TEXT_INDEX_OPTIONS = {
-  default_language: 'none',
-  language_override: '__textLanguage',
+  default_language: "none",
+  language_override: "__textLanguage",
 };
 
 const objectIdRef = (ref: string, required = false) => ({
@@ -105,7 +106,7 @@ const objectIdRef = (ref: string, required = false) => ({
 });
 
 const setJsonOptions = (schema: Schema): void => {
-  schema.set('toJSON', {
+  schema.set("toJSON", {
     virtuals: true,
     versionKey: false,
     transform: (_doc, ret) => {
@@ -114,7 +115,7 @@ const setJsonOptions = (schema: Schema): void => {
     },
   });
 
-  schema.set('toObject', {
+  schema.set("toObject", {
     virtuals: true,
     versionKey: false,
     transform: (_doc, ret) => {
@@ -132,6 +133,33 @@ export interface ProjectMemberSubdocument {
   expectedFinishedAt?: Date | null;
 }
 
+export interface ProjectPhaseFinancialSubdocument {
+  expectedRevenue: number;
+  expectedExpense: number;
+  realizedRevenue: number;
+  realizedExpense: number;
+  currency: string;
+  note?: string;
+  updatedAt?: Date | null;
+}
+
+export interface ProjectPhaseDocument extends Document {
+  projectId: Types.ObjectId;
+  title: string;
+  description?: string;
+  assignedUserIds: Types.ObjectId[];
+  startDate: Date;
+  endDate: Date;
+  order: number;
+  financial: ProjectPhaseFinancialSubdocument;
+  createdBy?: Types.ObjectId | null;
+  updatedBy?: Types.ObjectId | null;
+  language?: "fa";
+  direction?: "rtl";
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface ProjectDocument extends Document {
   title: string;
   description?: string;
@@ -146,8 +174,8 @@ export interface ProjectDocument extends Document {
   projectMembers: ProjectMemberSubdocument[];
   createdBy?: Types.ObjectId | null;
   updatedBy?: Types.ObjectId | null;
-  language?: 'fa';
-  direction?: 'rtl';
+  language?: "fa";
+  direction?: "rtl";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -169,8 +197,8 @@ export interface ProjectTaskDocument extends Document {
   source?: ProjectSource | string;
   telegramChatId?: string;
   telegramMessageId?: number | null;
-  language?: 'fa';
-  direction?: 'rtl';
+  language?: "fa";
+  direction?: "rtl";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -185,8 +213,8 @@ export interface ProjectProgressNoteDocument extends Document {
   source?: ProjectSource | string;
   telegramChatId?: string;
   telegramMessageId?: number | null;
-  language?: 'fa';
-  direction?: 'rtl';
+  language?: "fa";
+  direction?: "rtl";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -215,25 +243,71 @@ export interface ProjectFileDocument extends Document {
   transcriptionModel?: string;
   transcriptionLanguage?: string;
   transcribedAt?: Date | null;
-  language?: 'fa';
-  direction?: 'rtl';
+  language?: "fa";
+  direction?: "rtl";
   createdAt: Date;
   updatedAt: Date;
 }
 
+const ProjectPhaseFinancialSchema =
+  new Schema<ProjectPhaseFinancialSubdocument>(
+    {
+      expectedRevenue: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      expectedExpense: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      realizedRevenue: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      realizedExpense: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      currency: {
+        type: String,
+        default: "IRR",
+        trim: true,
+        uppercase: true,
+        maxlength: 12,
+      },
+      note: {
+        type: String,
+        default: "",
+        trim: true,
+        maxlength: 1000,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+    {
+      _id: false,
+    },
+  );
+
 const ProjectMemberSchema = new Schema<ProjectMemberSubdocument>(
   {
     userId: {
-      ...objectIdRef('User', true),
+      ...objectIdRef("User", true),
       index: true,
     },
     roleId: {
-      ...objectIdRef('ProjectRole'),
+      ...objectIdRef("ProjectRole"),
       default: null,
     },
     roleInProject: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
       maxlength: 120,
     },
@@ -261,7 +335,7 @@ const ProjectSchema = new Schema<ProjectDocument>(
     },
     description: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
     },
     status: {
@@ -293,12 +367,12 @@ const ProjectSchema = new Schema<ProjectDocument>(
       default: null,
     },
     ownerId: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     assignedUserIds: [
       {
-        ...objectIdRef('User'),
+        ...objectIdRef("User"),
       },
     ],
     projectMembers: {
@@ -306,20 +380,20 @@ const ProjectSchema = new Schema<ProjectDocument>(
       default: [],
     },
     createdBy: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     updatedBy: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     language: {
       type: String,
-      default: 'fa',
+      default: "fa",
     },
     direction: {
       type: String,
-      default: 'rtl',
+      default: "rtl",
     },
   },
   {
@@ -327,7 +401,7 @@ const ProjectSchema = new Schema<ProjectDocument>(
   },
 );
 
-ProjectSchema.pre('validate', function setProjectLabels() {
+ProjectSchema.pre("validate", function setProjectLabels() {
   this.statusLabel =
     PROJECT_STATUS_LABELS[this.status as ProjectStatus] || this.status;
 
@@ -335,24 +409,21 @@ ProjectSchema.pre('validate', function setProjectLabels() {
     PROJECT_PRIORITY_LABELS[this.priority as ProjectPriority] || this.priority;
 });
 
-ProjectSchema.index(
-  { title: 'text', description: 'text' },
-  TEXT_INDEX_OPTIONS,
-);
+ProjectSchema.index({ title: "text", description: "text" }, TEXT_INDEX_OPTIONS);
 ProjectSchema.index({ status: 1, priority: 1 });
 ProjectSchema.index({ ownerId: 1 });
 ProjectSchema.index({ assignedUserIds: 1 });
-ProjectSchema.index({ 'projectMembers.userId': 1 });
-ProjectSchema.index({ 'projectMembers.roleId': 1 });
-ProjectSchema.index({ 'projectMembers.expectedFinishedAt': 1 });
+ProjectSchema.index({ "projectMembers.userId": 1 });
+ProjectSchema.index({ "projectMembers.roleId": 1 });
+ProjectSchema.index({ "projectMembers.expectedFinishedAt": 1 });
 ProjectSchema.index({ dueDate: 1 });
 
 setJsonOptions(ProjectSchema);
 
-const ProjectTaskSchema = new Schema<ProjectTaskDocument>(
+const ProjectPhaseSchema = new Schema<ProjectPhaseDocument>(
   {
     projectId: {
-      ...objectIdRef('Project', true),
+      ...objectIdRef("Project", true),
       index: true,
     },
     title: {
@@ -363,12 +434,94 @@ const ProjectTaskSchema = new Schema<ProjectTaskDocument>(
     },
     description: {
       type: String,
-      default: '',
+      default: "",
+      trim: true,
+      maxlength: 2000,
+    },
+    assignedUserIds: [
+      {
+        ...objectIdRef("User"),
+      },
+    ],
+    startDate: {
+      type: Date,
+      required: true,
+    },
+    endDate: {
+      type: Date,
+      required: true,
+    },
+    order: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+    financial: {
+      type: ProjectPhaseFinancialSchema,
+      default: () => ({}),
+    },
+    createdBy: {
+      ...objectIdRef("User"),
+      default: null,
+    },
+    updatedBy: {
+      ...objectIdRef("User"),
+      default: null,
+    },
+    language: {
+      type: String,
+      default: "fa",
+    },
+    direction: {
+      type: String,
+      default: "rtl",
+    },
+  },
+  {
+    timestamps: true,
+  },
+);
+
+ProjectPhaseSchema.pre("validate", function validateProjectPhase() {
+  if (this.endDate && this.startDate && this.endDate < this.startDate) {
+    this.invalidate(
+      "endDate",
+      "تاریخ پایان فاز نمی‌تواند قبل از تاریخ شروع باشد.",
+    );
+  }
+});
+
+ProjectPhaseSchema.index({ projectId: 1, order: 1 });
+ProjectPhaseSchema.index({ projectId: 1, startDate: 1 });
+ProjectPhaseSchema.index({ projectId: 1, endDate: 1 });
+ProjectPhaseSchema.index({ assignedUserIds: 1 });
+ProjectPhaseSchema.index(
+  { title: "text", description: "text" },
+  TEXT_INDEX_OPTIONS,
+);
+
+setJsonOptions(ProjectPhaseSchema);
+
+const ProjectTaskSchema = new Schema<ProjectTaskDocument>(
+  {
+    projectId: {
+      ...objectIdRef("Project", true),
+      index: true,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 220,
+    },
+    description: {
+      type: String,
+      default: "",
       trim: true,
     },
     assignedUserIds: [
       {
-        ...objectIdRef('User'),
+        ...objectIdRef("User"),
       },
     ],
     status: {
@@ -404,11 +557,11 @@ const ProjectTaskSchema = new Schema<ProjectTaskDocument>(
       default: null,
     },
     createdBy: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     updatedBy: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     source: {
@@ -417,7 +570,7 @@ const ProjectTaskSchema = new Schema<ProjectTaskDocument>(
     },
     telegramChatId: {
       type: String,
-      default: '',
+      default: "",
     },
     telegramMessageId: {
       type: Number,
@@ -425,11 +578,11 @@ const ProjectTaskSchema = new Schema<ProjectTaskDocument>(
     },
     language: {
       type: String,
-      default: 'fa',
+      default: "fa",
     },
     direction: {
       type: String,
-      default: 'rtl',
+      default: "rtl",
     },
   },
   {
@@ -437,7 +590,7 @@ const ProjectTaskSchema = new Schema<ProjectTaskDocument>(
   },
 );
 
-ProjectTaskSchema.pre('validate', function setProjectTaskLabels() {
+ProjectTaskSchema.pre("validate", function setProjectTaskLabels() {
   this.statusLabel =
     PROJECT_TASK_STATUS_LABELS[this.status as ProjectTaskStatus] || this.status;
 
@@ -459,7 +612,7 @@ ProjectTaskSchema.index({ assignedUserIds: 1, status: 1 });
 ProjectTaskSchema.index({ createdBy: 1, status: 1 });
 ProjectTaskSchema.index({ dueDate: 1 });
 ProjectTaskSchema.index(
-  { title: 'text', description: 'text' },
+  { title: "text", description: "text" },
   TEXT_INDEX_OPTIONS,
 );
 
@@ -468,15 +621,15 @@ setJsonOptions(ProjectTaskSchema);
 const ProjectProgressNoteSchema = new Schema<ProjectProgressNoteDocument>(
   {
     projectId: {
-      ...objectIdRef('Project', true),
+      ...objectIdRef("Project", true),
       index: true,
     },
     authorId: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     registeredById: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     note: {
@@ -492,7 +645,7 @@ const ProjectProgressNoteSchema = new Schema<ProjectProgressNoteDocument>(
     },
     statusSnapshot: {
       type: String,
-      default: '',
+      default: "",
     },
     source: {
       type: String,
@@ -500,7 +653,7 @@ const ProjectProgressNoteSchema = new Schema<ProjectProgressNoteDocument>(
     },
     telegramChatId: {
       type: String,
-      default: '',
+      default: "",
     },
     telegramMessageId: {
       type: Number,
@@ -508,11 +661,11 @@ const ProjectProgressNoteSchema = new Schema<ProjectProgressNoteDocument>(
     },
     language: {
       type: String,
-      default: 'fa',
+      default: "fa",
     },
     direction: {
       type: String,
-      default: 'rtl',
+      default: "rtl",
     },
   },
   {
@@ -523,28 +676,28 @@ const ProjectProgressNoteSchema = new Schema<ProjectProgressNoteDocument>(
 ProjectProgressNoteSchema.index({ projectId: 1, createdAt: -1 });
 ProjectProgressNoteSchema.index({ authorId: 1 });
 ProjectProgressNoteSchema.index({ registeredById: 1 });
-ProjectProgressNoteSchema.index({ note: 'text' }, TEXT_INDEX_OPTIONS);
+ProjectProgressNoteSchema.index({ note: "text" }, TEXT_INDEX_OPTIONS);
 
 setJsonOptions(ProjectProgressNoteSchema);
 
 const ProjectFileSchema = new Schema<ProjectFileDocument>(
   {
     projectId: {
-      ...objectIdRef('Project', true),
+      ...objectIdRef("Project", true),
       index: true,
     },
     progressNoteId: {
-      ...objectIdRef('ProjectProgressNote'),
+      ...objectIdRef("ProjectProgressNote"),
       default: null,
       index: true,
     },
     taskId: {
-      ...objectIdRef('ProjectTask'),
+      ...objectIdRef("ProjectTask"),
       default: null,
       index: true,
     },
     uploadedBy: {
-      ...objectIdRef('User'),
+      ...objectIdRef("User"),
       default: null,
     },
     fileName: {
@@ -564,7 +717,7 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
     },
     fileType: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
     },
     fileSize: {
@@ -588,11 +741,11 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
     },
     telegramFileId: {
       type: String,
-      default: '',
+      default: "",
     },
     telegramFileUniqueId: {
       type: String,
-      default: '',
+      default: "",
     },
     telegramMessageId: {
       type: Number,
@@ -600,36 +753,36 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
     },
     telegramChatId: {
       type: String,
-      default: '',
+      default: "",
     },
     telegramAttachmentKind: {
       type: String,
-      default: '',
+      default: "",
     },
     transcriptionStatus: {
       type: String,
-      enum: ['not_applicable', 'completed', 'failed'],
-      default: 'not_applicable',
+      enum: ["not_applicable", "completed", "failed"],
+      default: "not_applicable",
       index: true,
     },
     transcriptionText: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
     },
     transcriptionError: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
     },
     transcriptionModel: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
     },
     transcriptionLanguage: {
       type: String,
-      default: '',
+      default: "",
       trim: true,
     },
     transcribedAt: {
@@ -638,11 +791,11 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
     },
     language: {
       type: String,
-      default: 'fa',
+      default: "fa",
     },
     direction: {
       type: String,
-      default: 'rtl',
+      default: "rtl",
     },
   },
   {
@@ -650,7 +803,7 @@ const ProjectFileSchema = new Schema<ProjectFileDocument>(
   },
 );
 
-ProjectFileSchema.pre('validate', function setProjectFileLabels() {
+ProjectFileSchema.pre("validate", function setProjectFileLabels() {
   this.categoryLabel =
     PROJECT_FILE_CATEGORY_LABELS[this.category as ProjectFileCategory] ||
     this.category ||
@@ -664,7 +817,7 @@ ProjectFileSchema.index({ taskId: 1, createdAt: -1 });
 ProjectFileSchema.index({ progressNoteId: 1, createdAt: -1 });
 ProjectFileSchema.index({ uploadedBy: 1 });
 ProjectFileSchema.index(
-  { originalName: 'text', fileName: 'text', transcriptionText: 'text' },
+  { originalName: "text", fileName: "text", transcriptionText: "text" },
   TEXT_INDEX_OPTIONS,
 );
 
@@ -672,21 +825,25 @@ setJsonOptions(ProjectFileSchema);
 
 export const Project: Model<ProjectDocument> =
   (mongoose.models.Project as Model<ProjectDocument>) ||
-  mongoose.model<ProjectDocument>('Project', ProjectSchema);
+  mongoose.model<ProjectDocument>("Project", ProjectSchema);
+
+export const ProjectPhase: Model<ProjectPhaseDocument> =
+  (mongoose.models.ProjectPhase as Model<ProjectPhaseDocument>) ||
+  mongoose.model<ProjectPhaseDocument>("ProjectPhase", ProjectPhaseSchema);
 
 export const ProjectTask: Model<ProjectTaskDocument> =
   (mongoose.models.ProjectTask as Model<ProjectTaskDocument>) ||
-  mongoose.model<ProjectTaskDocument>('ProjectTask', ProjectTaskSchema);
+  mongoose.model<ProjectTaskDocument>("ProjectTask", ProjectTaskSchema);
 
 export const ProjectProgressNote: Model<ProjectProgressNoteDocument> =
   (mongoose.models.ProjectProgressNote as Model<ProjectProgressNoteDocument>) ||
   mongoose.model<ProjectProgressNoteDocument>(
-    'ProjectProgressNote',
+    "ProjectProgressNote",
     ProjectProgressNoteSchema,
   );
 
 export const ProjectFile: Model<ProjectFileDocument> =
   (mongoose.models.ProjectFile as Model<ProjectFileDocument>) ||
-  mongoose.model<ProjectFileDocument>('ProjectFile', ProjectFileSchema);
+  mongoose.model<ProjectFileDocument>("ProjectFile", ProjectFileSchema);
 
 export default Project;

@@ -110,16 +110,16 @@ export const createUserSchema = {
         'any.only': 'یکی از دسترسی‌های ارسال‌شده معتبر نیست.',
       }),
 
-    telegramUserId: Joi.string().trim().max(40).allow('').optional().messages({
-      'string.max': 'شناسه تلگرام نباید بیشتر از ۴۰ کاراکتر باشد.',
+    telegramUserId: Joi.forbidden().messages({
+      'any.unknown': 'شناسه تلگرام فقط از طریق کد اتصال ربات ثبت می‌شود.',
     }),
 
-    telegramChatId: Joi.string().trim().max(40).allow('').optional().messages({
-      'string.max': 'شناسه چت تلگرام نباید بیشتر از ۴۰ کاراکتر باشد.',
+    telegramChatId: Joi.forbidden().messages({
+      'any.unknown': 'شناسه چت تلگرام فقط از طریق کد اتصال ربات ثبت می‌شود.',
     }),
 
-    telegramUsername: Joi.string().trim().max(100).allow('').optional().messages({
-      'string.max': 'نام کاربری تلگرام نباید بیشتر از ۱۰۰ کاراکتر باشد.',
+    telegramUsername: Joi.forbidden().messages({
+      'any.unknown': 'نام کاربری تلگرام فقط از طریق کد اتصال ربات ثبت می‌شود.',
     }),
     profile: profileSchema.default({}),
 
@@ -166,9 +166,9 @@ export const updateUserSchema = {
     profile: profileSchema.optional(),
     workUnit: workUnitSchema.optional(),
     managerId: objectIdSchema.allow(null).optional(),
-    telegramUserId: Joi.string().trim().max(40).allow('').optional(),
-    telegramChatId: Joi.string().trim().max(40).allow('').optional(),
-    telegramUsername: Joi.string().trim().max(100).allow('').optional(),
+    telegramUserId: Joi.forbidden(),
+    telegramChatId: Joi.forbidden(),
+    telegramUsername: Joi.forbidden(),
   })
     .min(1)
     .messages({

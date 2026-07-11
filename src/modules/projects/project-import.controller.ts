@@ -1,14 +1,14 @@
-import { Request, Response } from 'express';
-import mongoose, { Types } from 'mongoose';
-import * as XLSX from 'xlsx';
+import { Request, Response } from "express";
+import mongoose, { Types } from "mongoose";
+import * as XLSX from "xlsx";
 import {
   Project,
+  ProjectPhase,
   ProjectPriority,
   PROJECT_PRIORITY_LABELS,
   ProjectStatus,
   PROJECT_STATUS_LABELS,
-} from '@/modules/projects/project.model';
-import User, { UserStatus } from '@/modules/users/user.model';
+} from "@/modules/projects/project.model";
 
 type AuthRequest = Request & {
   file?: Express.Multer.File;
@@ -22,13 +22,6 @@ type AuthRequest = Request & {
 
 type RawExcelRow = Record<string, unknown>;
 
-type ProjectImportMemberMeta = {
-  username: string;
-  roleInProject: string;
-  startedAt: Date | null;
-  expectedFinishedAt: Date | null;
-};
-
 type NormalizedProjectRow = {
   rowNumber: number;
   title: string;
@@ -37,12 +30,29 @@ type NormalizedProjectRow = {
   priority: ProjectPriority;
   startDate: Date;
   dueDate: Date | null;
-  ownerUsername: string;
-  assignedUsernames: string[];
-  memberMeta: ProjectImportMemberMeta[];
+};
+
+type NormalizedPhaseRow = {
+  rowNumber: number;
+  projectTitle: string;
+  title: string;
+  description: string;
+  startDate: Date;
+  endDate: Date;
+  order: number;
+  financial: {
+    expectedRevenue: number;
+    expectedExpense: number;
+    realizedRevenue: number;
+    realizedExpense: number;
+    currency: string;
+    note: string;
+    updatedAt: Date | null;
+  };
 };
 
 type ImportErrorItem = {
+  sheet: "Projects" | "Phases";
   rowNumber: number;
   title?: string;
   message: string;
@@ -52,18 +62,26 @@ type ImportCreatedItem = {
   rowNumber: number;
   id: string;
   title: string;
+  phaseCount: number;
+  staffingRequired: true;
 };
 
-const MAX_IMPORT_ROWS = 500;
+type ExtractedWorkbookRows = {
+  projectRows: RawExcelRow[];
+  phaseRows: RawExcelRow[];
+};
+
+const MAX_IMPORT_PROJECT_ROWS = 500;
+const MAX_IMPORT_PHASE_ROWS = 2500;
 
 const getAuthUserId = (req: AuthRequest): string => {
-  return String(req.user?.id || req.user?._id || req.user?.userId || '');
+  return String(req.user?.id || req.user?._id || req.user?.userId || "");
 };
 
 const isManager = (req: AuthRequest): boolean => {
-  const role = String(req.user?.role || '').toLowerCase();
+  const role = String(req.user?.role || "").toLowerCase();
 
-  return role === 'manager' || role === 'admin';
+  return role === "manager" || role === "admin";
 };
 
 const isValidObjectId = (value?: string): boolean => {
@@ -74,15 +92,31 @@ const toObjectId = (value: string): Types.ObjectId => {
   return new mongoose.Types.ObjectId(value);
 };
 
+const normalizeDigits = (value: string): string => {
+  const persianDigits = "۰۱۲۳۴۵۶۷۸۹";
+  const arabicDigits = "٠١٢٣٤٥٦٧٨٩";
+
+  return value
+    .replace(/[۰-۹]/g, (digit) => String(persianDigits.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String(arabicDigits.indexOf(digit)));
+};
+
 const normalizeKey = (value: string): string => {
-  return value.trim().toLowerCase().replace(/\s+/g, '_');
+  return normalizeDigits(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\u200c-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+};
+
+const normalizeProjectTitleKey = (value: string): string => {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
 };
 
 const buildRowMap = (row: RawExcelRow): Record<string, unknown> => {
   return Object.entries(row).reduce<Record<string, unknown>>(
     (acc, [key, value]) => {
       acc[normalizeKey(key)] = value;
-
       return acc;
     },
     {},
@@ -100,39 +134,17 @@ const readCell = (row: RawExcelRow, aliases: string[]): unknown => {
     }
   }
 
-  return '';
+  return "";
 };
 
 const cellHasValue = (value: unknown): boolean => {
-  return value !== null && value !== undefined && String(value).trim() !== '';
+  return value !== null && value !== undefined && String(value).trim() !== "";
 };
 
 const toText = (value: unknown): string => {
-  if (value === null || value === undefined) return '';
+  if (value === null || value === undefined) return "";
 
   return String(value).trim();
-};
-
-const normalizeUsername = (value: unknown): string => {
-  return toText(value).toLowerCase();
-};
-
-const splitUsernames = (value: unknown): string[] => {
-  return Array.from(
-    new Set(
-      toText(value)
-        .split(/[,،]/)
-        .map((item) => item.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  );
-};
-
-const splitTextList = (value: unknown): string[] => {
-  return toText(value)
-    .split(/[,،]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
 };
 
 const parseDateValue = (value: unknown): Date | null => {
@@ -142,7 +154,7 @@ const parseDateValue = (value: unknown): Date | null => {
     return value;
   }
 
-  if (typeof value === 'number') {
+  if (typeof value === "number") {
     const parsed = XLSX.SSF.parse_date_code(value);
 
     if (!parsed) return null;
@@ -150,22 +162,56 @@ const parseDateValue = (value: unknown): Date | null => {
     return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
   }
 
-  const text = toText(value);
+  const text = normalizeDigits(toText(value));
 
   if (!text) return null;
 
-  const normalized = text.replace(/\//g, '-');
+  const normalized = text.replace(/\//g, "-");
 
   if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(normalized)) {
-    const [year, month, day] = normalized.split('-').map(Number);
+    const [year, month, day] = normalized.split("-").map(Number);
     const date = new Date(Date.UTC(year, month - 1, day));
 
-    return Number.isNaN(date.getTime()) ? null : date;
+    if (
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
+    ) {
+      return null;
+    }
+
+    return date;
   }
 
   const date = new Date(text);
 
   return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const parseNonNegativeNumber = (value: unknown): number | null => {
+  if (!cellHasValue(value)) return 0;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0
+      ? Math.round(value * 100) / 100
+      : null;
+  }
+
+  const normalized = normalizeDigits(toText(value))
+    .replace(/[,_\s]/g, "")
+    .replace(/٬/g, "")
+    .replace(/٫/g, ".");
+  const amount = Number(normalized);
+
+  if (!Number.isFinite(amount) || amount < 0) return null;
+
+  return Math.round(amount * 100) / 100;
+};
+
+const normalizeCurrency = (value: unknown): string => {
+  const currency = toText(value).toUpperCase();
+
+  return currency ? currency.slice(0, 12) : "IRR";
 };
 
 const normalizeStatus = (value: unknown): ProjectStatus | null => {
@@ -177,27 +223,29 @@ const normalizeStatus = (value: unknown): ProjectStatus | null => {
     negotiating: ProjectStatus.NEGOTIATING,
     negotiation: ProjectStatus.NEGOTIATING,
     مذاکره: ProjectStatus.NEGOTIATING,
-    'در حال مذاکره': ProjectStatus.NEGOTIATING,
+    "در حال مذاکره": ProjectStatus.NEGOTIATING,
 
     proposal_drafting: ProjectStatus.PROPOSAL_DRAFTING,
     drafting_proposal: ProjectStatus.PROPOSAL_DRAFTING,
     proposal: ProjectStatus.PROPOSAL_DRAFTING,
     پروپوزال: ProjectStatus.PROPOSAL_DRAFTING,
-    'تدوین پروپوزال': ProjectStatus.PROPOSAL_DRAFTING,
-    'تهیه پروپوزال': ProjectStatus.PROPOSAL_DRAFTING,
-    'پیش‌نویس پروپوزال': ProjectStatus.PROPOSAL_DRAFTING,
-    'پیشنهاد فنی': ProjectStatus.PROPOSAL_DRAFTING,
+    "تدوین پروپوزال": ProjectStatus.PROPOSAL_DRAFTING,
+    "تهیه پروپوزال": ProjectStatus.PROPOSAL_DRAFTING,
+    "پیش نویس پروپوزال": ProjectStatus.PROPOSAL_DRAFTING,
+    "پیش‌نویس پروپوزال": ProjectStatus.PROPOSAL_DRAFTING,
+    "پیشنهاد فنی": ProjectStatus.PROPOSAL_DRAFTING,
 
     contract_signing: ProjectStatus.CONTRACT_SIGNING,
     signing_contract: ProjectStatus.CONTRACT_SIGNING,
     contract: ProjectStatus.CONTRACT_SIGNING,
     قرارداد: ProjectStatus.CONTRACT_SIGNING,
-    'عقد قرارداد': ProjectStatus.CONTRACT_SIGNING,
-    'امضای قرارداد': ProjectStatus.CONTRACT_SIGNING,
-    'در حال عقد قرارداد': ProjectStatus.CONTRACT_SIGNING,
+    "عقد قرارداد": ProjectStatus.CONTRACT_SIGNING,
+    "امضای قرارداد": ProjectStatus.CONTRACT_SIGNING,
+    "در حال عقد قرارداد": ProjectStatus.CONTRACT_SIGNING,
 
     planning: ProjectStatus.PLANNING,
-    برنامه‌ریزی: ProjectStatus.PLANNING,
+    "برنامه ریزی": ProjectStatus.PLANNING,
+    "برنامه‌ریزی": ProjectStatus.PLANNING,
     برنامه_ریزی: ProjectStatus.PLANNING,
 
     active: ProjectStatus.ACTIVE,
@@ -206,12 +254,13 @@ const normalizeStatus = (value: unknown): ProjectStatus | null => {
     on_hold: ProjectStatus.ON_HOLD,
     hold: ProjectStatus.ON_HOLD,
     متوقف: ProjectStatus.ON_HOLD,
-    'متوقف موقت': ProjectStatus.ON_HOLD,
+    "متوقف موقت": ProjectStatus.ON_HOLD,
 
     completed: ProjectStatus.COMPLETED,
     done: ProjectStatus.COMPLETED,
     تکمیل: ProjectStatus.COMPLETED,
-    'تکمیل‌شده': ProjectStatus.COMPLETED,
+    "تکمیل شده": ProjectStatus.COMPLETED,
+    "تکمیل‌شده": ProjectStatus.COMPLETED,
 
     cancelled: ProjectStatus.CANCELLED,
     canceled: ProjectStatus.CANCELLED,
@@ -244,24 +293,41 @@ const normalizePriority = (value: unknown): ProjectPriority | null => {
   return map[text] || null;
 };
 
-const extractRowsFromWorkbook = (fileBuffer: Buffer): RawExcelRow[] => {
+const getSheetByName = (
+  workbook: XLSX.WorkBook,
+  expectedName: string,
+): XLSX.WorkSheet | null => {
+  const matchedName = workbook.SheetNames.find(
+    (sheetName) => normalizeKey(sheetName) === normalizeKey(expectedName),
+  );
+
+  return matchedName ? workbook.Sheets[matchedName] : null;
+};
+
+const sheetToRows = (sheet: XLSX.WorkSheet | null): RawExcelRow[] => {
+  if (!sheet) return [];
+
+  return XLSX.utils.sheet_to_json<RawExcelRow>(sheet, {
+    defval: "",
+    raw: true,
+  });
+};
+
+const extractRowsFromWorkbook = (fileBuffer: Buffer): ExtractedWorkbookRows => {
   const workbook = XLSX.read(fileBuffer, {
-    type: 'buffer',
+    type: "buffer",
     cellDates: true,
   });
 
-  const sheetName = workbook.SheetNames.includes('Projects')
-    ? 'Projects'
-    : workbook.SheetNames[0];
+  const projectsSheet =
+    getSheetByName(workbook, "Projects") ||
+    (workbook.SheetNames[0] ? workbook.Sheets[workbook.SheetNames[0]] : null);
+  const phasesSheet = getSheetByName(workbook, "Phases");
 
-  if (!sheetName) return [];
-
-  const sheet = workbook.Sheets[sheetName];
-
-  return XLSX.utils.sheet_to_json<RawExcelRow>(sheet, {
-    defval: '',
-    raw: true,
-  });
+  return {
+    projectRows: sheetToRows(projectsSheet),
+    phaseRows: sheetToRows(phasesSheet),
+  };
 };
 
 const normalizeProjectRows = (
@@ -272,65 +338,30 @@ const normalizeProjectRows = (
 } => {
   const validRows: NormalizedProjectRow[] = [];
   const errors: ImportErrorItem[] = [];
+  const fileTitleKeys = new Set<string>();
 
-  rows.slice(0, MAX_IMPORT_ROWS).forEach((row, index) => {
+  rows.slice(0, MAX_IMPORT_PROJECT_ROWS).forEach((row, index) => {
     const rowNumber = index + 2;
-
     const title = toText(
-      readCell(row, ['title', 'project_title', 'project title', 'عنوان']),
+      readCell(row, ["title", "project_title", "project title", "عنوان"]),
     );
-
     const description = toText(
-      readCell(row, ['description', 'project_description', 'توضیحات']),
+      readCell(row, ["description", "project_description", "توضیحات"]),
     );
-
-    const rawStatus = readCell(row, ['status', 'وضعیت']);
-    const rawPriority = readCell(row, ['priority', 'اولویت']);
+    const rawStatus = readCell(row, ["status", "وضعیت"]);
+    const rawPriority = readCell(row, ["priority", "اولویت"]);
     const rawStartDate = readCell(row, [
-      'start_date',
-      'start date',
-      'startDate',
-      'تاریخ شروع',
+      "start_date",
+      "start date",
+      "startDate",
+      "تاریخ شروع",
     ]);
     const rawDueDate = readCell(row, [
-      'due_date',
-      'due date',
-      'dueDate',
-      'تاریخ تحویل',
-      'موعد',
-    ]);
-    const rawOwnerUsername = readCell(row, [
-      'owner_username',
-      'owner username',
-      'owner',
-      'مسئول پروژه',
-      'مالک',
-    ]);
-    const rawAssignedUsernames = readCell(row, [
-      'assigned_usernames',
-      'assigned usernames',
-      'assigned_users',
-      'کاربران مسئول',
-      'اعضا',
-    ]);
-    const rawMemberRoles = readCell(row, [
-      'member_roles',
-      'project_member_roles',
-      'roles',
-      'نقش اعضا',
-      'نقش‌ها',
-    ]);
-    const rawMemberStartedAt = readCell(row, [
-      'member_started_at',
-      'member_start_dates',
-      'started_at',
-      'تاریخ شروع اعضا',
-    ]);
-    const rawMemberExpectedFinishedAt = readCell(row, [
-      'member_expected_finished_at',
-      'member_due_dates',
-      'expected_finished_at',
-      'تاریخ پایان احتمالی اعضا',
+      "due_date",
+      "due date",
+      "dueDate",
+      "تاریخ تحویل",
+      "موعد",
     ]);
 
     const rowIsEmpty = [
@@ -340,32 +371,24 @@ const normalizeProjectRows = (
       rawPriority,
       rawStartDate,
       rawDueDate,
-      rawOwnerUsername,
-      rawAssignedUsernames,
-      rawMemberRoles,
-      rawMemberStartedAt,
-      rawMemberExpectedFinishedAt,
     ].every((item) => !cellHasValue(item));
 
     if (rowIsEmpty) return;
 
     const rowErrors: string[] = [];
+    const titleKey = normalizeProjectTitleKey(title);
 
     if (!title) {
-      rowErrors.push('عنوان پروژه الزامی است.');
-    }
-
-    const ownerUsername = normalizeUsername(rawOwnerUsername);
-
-    if (!ownerUsername) {
-      rowErrors.push('owner_username الزامی است.');
+      rowErrors.push("عنوان پروژه الزامی است.");
+    } else if (fileTitleKeys.has(titleKey)) {
+      rowErrors.push("عنوان پروژه در فایل اکسل تکراری است.");
     }
 
     const status = normalizeStatus(rawStatus);
 
     if (!status) {
       rowErrors.push(
-        'وضعیت پروژه معتبر نیست. مقدار مجاز: planning, active, on_hold, completed, cancelled',
+        "وضعیت پروژه معتبر نیست. مقادیر مجاز: negotiating, proposal_drafting, contract_signing, planning, active, on_hold, completed, cancelled",
       );
     }
 
@@ -373,49 +396,37 @@ const normalizeProjectRows = (
 
     if (!priority) {
       rowErrors.push(
-        'اولویت پروژه معتبر نیست. مقدار مجاز: low, medium, high, critical',
+        "اولویت پروژه معتبر نیست. مقادیر مجاز: low, medium, high, critical",
       );
     }
 
     const startDate = parseDateValue(rawStartDate);
 
     if (!startDate) {
-      rowErrors.push('start_date معتبر نیست. فرمت پیشنهادی: YYYY-MM-DD');
+      rowErrors.push("start_date معتبر نیست. فرمت پیشنهادی: YYYY-MM-DD");
     }
 
     const dueDate = parseDateValue(rawDueDate);
 
     if (cellHasValue(rawDueDate) && !dueDate) {
-      rowErrors.push('due_date معتبر نیست. فرمت پیشنهادی: YYYY-MM-DD');
+      rowErrors.push("due_date معتبر نیست. فرمت پیشنهادی: YYYY-MM-DD");
     }
 
     if (startDate && dueDate && dueDate < startDate) {
-      rowErrors.push('موعد تحویل نمی‌تواند قبل از تاریخ شروع باشد.');
+      rowErrors.push("موعد تحویل نمی‌تواند قبل از تاریخ شروع باشد.");
     }
 
     if (rowErrors.length) {
       errors.push({
+        sheet: "Projects",
         rowNumber,
         title: title || undefined,
-        message: rowErrors.join(' '),
+        message: rowErrors.join(" "),
       });
-
       return;
     }
 
-    const assignedUsernames = splitUsernames(rawAssignedUsernames);
-    const roleItems = splitTextList(rawMemberRoles);
-    const memberStartedAtItems = splitTextList(rawMemberStartedAt);
-    const memberExpectedFinishedAtItems = splitTextList(rawMemberExpectedFinishedAt);
-
-    const memberMeta = assignedUsernames.map((username, memberIndex) => ({
-      username,
-      roleInProject: roleItems[memberIndex] || 'عضو پروژه',
-      startedAt: parseDateValue(memberStartedAtItems[memberIndex]) || startDate,
-      expectedFinishedAt:
-        parseDateValue(memberExpectedFinishedAtItems[memberIndex]) || dueDate,
-    }));
-
+    fileTitleKeys.add(titleKey);
     validRows.push({
       rowNumber,
       title,
@@ -424,16 +435,237 @@ const normalizeProjectRows = (
       priority: priority || ProjectPriority.MEDIUM,
       startDate: startDate as Date,
       dueDate,
-      ownerUsername,
-      assignedUsernames,
-      memberMeta,
     });
   });
 
-  return {
-    validRows,
-    errors,
-  };
+  if (rows.length > MAX_IMPORT_PROJECT_ROWS) {
+    errors.push({
+      sheet: "Projects",
+      rowNumber: MAX_IMPORT_PROJECT_ROWS + 2,
+      message: `حداکثر ${MAX_IMPORT_PROJECT_ROWS} پروژه در هر فایل پردازش می‌شود. ردیف‌های بعدی نادیده گرفته شدند.`,
+    });
+  }
+
+  return { validRows, errors };
+};
+
+const normalizePhaseRows = (
+  rows: RawExcelRow[],
+  projectsByTitleKey: Map<string, NormalizedProjectRow>,
+): {
+  validRows: NormalizedPhaseRow[];
+  errors: ImportErrorItem[];
+  blockedProjectKeys: Set<string>;
+} => {
+  const validRows: NormalizedPhaseRow[] = [];
+  const errors: ImportErrorItem[] = [];
+  const blockedProjectKeys = new Set<string>();
+  const phaseIdentityKeys = new Set<string>();
+
+  rows.slice(0, MAX_IMPORT_PHASE_ROWS).forEach((row, index) => {
+    const rowNumber = index + 2;
+    const projectTitle = toText(
+      readCell(row, [
+        "project_title",
+        "project title",
+        "project",
+        "عنوان پروژه",
+      ]),
+    );
+    const title = toText(
+      readCell(row, ["phase_title", "phase title", "title", "عنوان فاز"]),
+    );
+    const description = toText(
+      readCell(row, [
+        "phase_description",
+        "phase description",
+        "description",
+        "توضیحات فاز",
+      ]),
+    );
+    const rawStartDate = readCell(row, [
+      "phase_start_date",
+      "start_date",
+      "start date",
+      "تاریخ شروع فاز",
+    ]);
+    const rawEndDate = readCell(row, [
+      "phase_end_date",
+      "end_date",
+      "end date",
+      "تاریخ پایان فاز",
+    ]);
+    const rawOrder = readCell(row, [
+      "phase_order",
+      "order",
+      "ترتیب فاز",
+      "ترتیب",
+    ]);
+    const rawExpectedRevenue = readCell(row, [
+      "expected_revenue",
+      "potential_revenue",
+      "potential_revenue_amount",
+      "درآمد پیش بینی شده",
+      "درآمد احتمالی",
+    ]);
+    const rawExpectedExpense = readCell(row, [
+      "expected_expense",
+      "potential_expense",
+      "potential_cost",
+      "potential_cost_amount",
+      "هزینه پیش بینی شده",
+      "هزینه احتمالی",
+    ]);
+    const rawRealizedRevenue = readCell(row, [
+      "realized_revenue",
+      "actual_revenue",
+      "درآمد محقق شده",
+    ]);
+    const rawRealizedExpense = readCell(row, [
+      "realized_expense",
+      "actual_expense",
+      "actual_cost",
+      "هزینه محقق شده",
+    ]);
+    const rawCurrency = readCell(row, ["currency", "واحد پول", "ارز"]);
+    const financialNote = toText(
+      readCell(row, [
+        "financial_note",
+        "finance_note",
+        "note",
+        "یادداشت مالی",
+      ]),
+    );
+
+    const rowIsEmpty = [
+      projectTitle,
+      title,
+      description,
+      rawStartDate,
+      rawEndDate,
+      rawOrder,
+      rawExpectedRevenue,
+      rawExpectedExpense,
+      rawRealizedRevenue,
+      rawRealizedExpense,
+      rawCurrency,
+      financialNote,
+    ].every((item) => !cellHasValue(item));
+
+    if (rowIsEmpty) return;
+
+    const rowErrors: string[] = [];
+    const projectTitleKey = normalizeProjectTitleKey(projectTitle);
+    const parentProject = projectsByTitleKey.get(projectTitleKey);
+
+    if (!projectTitle) {
+      rowErrors.push("project_title الزامی است.");
+    } else if (!parentProject) {
+      rowErrors.push(
+        "پروژه مرجع در شیت Projects پیدا نشد یا ردیف پروژه معتبر نیست.",
+      );
+    }
+
+    if (!title) {
+      rowErrors.push("عنوان فاز الزامی است.");
+    }
+
+    const startDate = parseDateValue(rawStartDate);
+    const endDate = parseDateValue(rawEndDate);
+
+    if (!startDate || !endDate) {
+      rowErrors.push(
+        "تاریخ شروع و پایان فاز معتبر نیست. فرمت پیشنهادی: YYYY-MM-DD",
+      );
+    } else if (endDate < startDate) {
+      rowErrors.push("تاریخ پایان فاز نمی‌تواند قبل از تاریخ شروع باشد.");
+    }
+
+    if (parentProject && startDate && startDate < parentProject.startDate) {
+      rowErrors.push("تاریخ شروع فاز نمی‌تواند قبل از شروع پروژه باشد.");
+    }
+
+    if (
+      parentProject?.dueDate &&
+      endDate &&
+      endDate > parentProject.dueDate
+    ) {
+      rowErrors.push("تاریخ پایان فاز نمی‌تواند بعد از موعد پروژه باشد.");
+    }
+
+    const parsedOrder = cellHasValue(rawOrder) ? Number(rawOrder) : 1;
+
+    if (!Number.isInteger(parsedOrder) || parsedOrder < 1) {
+      rowErrors.push("phase_order باید عدد صحیح بزرگ‌تر از صفر باشد.");
+    }
+
+    const expectedRevenue = parseNonNegativeNumber(rawExpectedRevenue);
+    const expectedExpense = parseNonNegativeNumber(rawExpectedExpense);
+    const realizedRevenue = parseNonNegativeNumber(rawRealizedRevenue);
+    const realizedExpense = parseNonNegativeNumber(rawRealizedExpense);
+
+    if (
+      expectedRevenue === null ||
+      expectedExpense === null ||
+      realizedRevenue === null ||
+      realizedExpense === null
+    ) {
+      rowErrors.push("مبالغ مالی فاز باید عدد مثبت یا صفر باشند.");
+    }
+
+    const phaseIdentityKey = `${projectTitleKey}::${parsedOrder}::${title.toLowerCase()}`;
+
+    if (title && phaseIdentityKeys.has(phaseIdentityKey)) {
+      rowErrors.push("این فاز با همین عنوان و ترتیب در فایل تکراری است.");
+    }
+
+    if (rowErrors.length) {
+      errors.push({
+        sheet: "Phases",
+        rowNumber,
+        title: title || projectTitle || undefined,
+        message: rowErrors.join(" "),
+      });
+
+      if (projectTitleKey && projectsByTitleKey.has(projectTitleKey)) {
+        blockedProjectKeys.add(projectTitleKey);
+      }
+      return;
+    }
+
+    phaseIdentityKeys.add(phaseIdentityKey);
+    validRows.push({
+      rowNumber,
+      projectTitle,
+      title,
+      description,
+      startDate: startDate as Date,
+      endDate: endDate as Date,
+      order: parsedOrder,
+      financial: {
+        expectedRevenue: expectedRevenue as number,
+        expectedExpense: expectedExpense as number,
+        realizedRevenue: realizedRevenue as number,
+        realizedExpense: realizedExpense as number,
+        currency: normalizeCurrency(rawCurrency),
+        note: financialNote,
+        updatedAt:
+          (realizedRevenue as number) > 0 || (realizedExpense as number) > 0
+            ? new Date()
+            : null,
+      },
+    });
+  });
+
+  if (rows.length > MAX_IMPORT_PHASE_ROWS) {
+    errors.push({
+      sheet: "Phases",
+      rowNumber: MAX_IMPORT_PHASE_ROWS + 2,
+      message: `حداکثر ${MAX_IMPORT_PHASE_ROWS} فاز در هر فایل پردازش می‌شود. ردیف‌های بعدی نادیده گرفته شدند.`,
+    });
+  }
+
+  return { validRows, errors, blockedProjectKeys };
 };
 
 export const importProjectsFromExcel = async (
@@ -445,10 +677,9 @@ export const importProjectsFromExcel = async (
   if (!isManager(authReq)) {
     res.status(403).json({
       success: false,
-      message: 'شما دسترسی لازم برای ورود گروهی پروژه‌ها را ندارید.',
-      code: 'FORBIDDEN',
+      message: "شما دسترسی لازم برای ورود گروهی پروژه‌ها را ندارید.",
+      code: "FORBIDDEN",
     });
-
     return;
   }
 
@@ -457,199 +688,216 @@ export const importProjectsFromExcel = async (
   if (!isValidObjectId(authUserId)) {
     res.status(400).json({
       success: false,
-      message: 'شناسه کاربر جاری معتبر نیست.',
-      code: 'VALIDATION_ERROR',
+      message: "شناسه کاربر جاری معتبر نیست.",
+      code: "VALIDATION_ERROR",
     });
-
     return;
   }
 
   if (!authReq.file?.buffer) {
     res.status(400).json({
       success: false,
-      message: 'فایل اکسل ارسال نشده است.',
-      code: 'EXCEL_FILE_REQUIRED',
+      message: "فایل اکسل ارسال نشده است.",
+      code: "EXCEL_FILE_REQUIRED",
     });
-
     return;
   }
 
-  const rows = extractRowsFromWorkbook(authReq.file.buffer);
+  let extractedRows: ExtractedWorkbookRows;
 
-  if (!rows.length) {
+  try {
+    extractedRows = extractRowsFromWorkbook(authReq.file.buffer);
+  } catch (_error) {
     res.status(400).json({
       success: false,
-      message: 'فایل اکسل خالی است یا ردیف قابل خواندن ندارد.',
-      code: 'EMPTY_EXCEL_FILE',
+      message: "فایل اکسل قابل خواندن نیست یا ساختار آن معتبر نیست.",
+      code: "INVALID_EXCEL_FILE",
     });
-
     return;
   }
 
-  const { validRows, errors } = normalizeProjectRows(rows);
-
-  if (!validRows.length) {
+  if (!extractedRows.projectRows.length) {
     res.status(400).json({
       success: false,
-      message: 'هیچ پروژه معتبری برای ورود پیدا نشد.',
-      code: 'NO_VALID_PROJECT_ROWS',
+      message: "شیت Projects خالی است یا ردیف قابل خواندن ندارد.",
+      code: "EMPTY_PROJECTS_SHEET",
+    });
+    return;
+  }
+
+  const normalizedProjects = normalizeProjectRows(extractedRows.projectRows);
+  const projectsByTitleKey = new Map(
+    normalizedProjects.validRows.map((project) => [
+      normalizeProjectTitleKey(project.title),
+      project,
+    ]),
+  );
+  const normalizedPhases = normalizePhaseRows(
+    extractedRows.phaseRows,
+    projectsByTitleKey,
+  );
+  const errors: ImportErrorItem[] = [
+    ...normalizedProjects.errors,
+    ...normalizedPhases.errors,
+  ];
+
+  if (!normalizedProjects.validRows.length) {
+    res.status(400).json({
+      success: false,
+      message: "هیچ پروژه معتبری برای ورود پیدا نشد.",
+      code: "NO_VALID_PROJECT_ROWS",
       data: {
-        totalRows: rows.length,
+        staffingMode: "post_import",
+        totalProjectRows: extractedRows.projectRows.length,
+        totalPhaseRows: extractedRows.phaseRows.length,
         createdCount: 0,
+        createdPhaseCount: 0,
         skippedCount: 0,
         failedCount: errors.length,
         created: [],
         errors,
       },
     });
-
     return;
   }
 
-  const allUsernames = Array.from(
-    new Set(
-      validRows.flatMap((row) => [
-        row.ownerUsername,
-        ...row.assignedUsernames,
-      ]),
-    ),
-  );
+  const phasesByProjectKey = new Map<string, NormalizedPhaseRow[]>();
 
-  const users = await User.find({
-    username: { $in: allUsernames },
-    status: UserStatus.ACTIVE,
-    isActive: true,
-  })
-    .select('_id username firstName lastName fullName email')
-    .lean();
-
-  const userMap = new Map(
-    users.map((user: any) => [String(user.username).toLowerCase(), user]),
-  );
+  normalizedPhases.validRows.forEach((phase) => {
+    const projectKey = normalizeProjectTitleKey(phase.projectTitle);
+    const currentPhases = phasesByProjectKey.get(projectKey) || [];
+    currentPhases.push(phase);
+    phasesByProjectKey.set(projectKey, currentPhases);
+  });
 
   const existingProjects = await Project.find({
-    title: { $in: validRows.map((row) => row.title) },
+    title: { $in: normalizedProjects.validRows.map((row) => row.title) },
   })
-    .select('title')
+    .select("title")
     .lean();
 
   const existingTitleSet = new Set(
-    existingProjects.map((project: any) => String(project.title).trim()),
+    existingProjects.map((project: any) =>
+      normalizeProjectTitleKey(String(project.title)),
+    ),
   );
 
   const created: ImportCreatedItem[] = [];
+  let createdPhaseCount = 0;
   let skippedCount = 0;
 
-  for (const row of validRows) {
-    if (existingTitleSet.has(row.title)) {
+  for (const row of normalizedProjects.validRows) {
+    const projectKey = normalizeProjectTitleKey(row.title);
+    const projectPhases = (phasesByProjectKey.get(projectKey) || []).sort(
+      (a, b) => a.order - b.order || a.startDate.getTime() - b.startDate.getTime(),
+    );
+
+    if (normalizedPhases.blockedProjectKeys.has(projectKey)) {
       skippedCount += 1;
-
       errors.push({
+        sheet: "Projects",
         rowNumber: row.rowNumber,
         title: row.title,
-        message: 'پروژه‌ای با همین عنوان از قبل وجود دارد و این ردیف رد شد.',
+        message:
+          "پروژه به دلیل وجود خطا در یکی از فازهای مرتبط وارد نشد. خطای شیت Phases را اصلاح کنید.",
       });
-
       continue;
     }
 
-    const owner = userMap.get(row.ownerUsername);
-
-    if (!owner) {
+    if (existingTitleSet.has(projectKey)) {
+      skippedCount += 1;
       errors.push({
+        sheet: "Projects",
         rowNumber: row.rowNumber,
         title: row.title,
-        message: `کاربر مسئول با username «${row.ownerUsername}» پیدا نشد یا فعال نیست.`,
+        message: "پروژه‌ای با همین عنوان از قبل وجود دارد و این ردیف رد شد.",
       });
-
       continue;
     }
 
-    const missingAssignedUsernames = row.assignedUsernames.filter(
-      (username) => !userMap.has(username),
-    );
+    let projectId: Types.ObjectId | null = null;
 
-    if (missingAssignedUsernames.length) {
-      errors.push({
-        rowNumber: row.rowNumber,
+    try {
+      const project = await Project.create({
         title: row.title,
-        message: `کاربران مسئول زیر پیدا نشدند یا فعال نیستند: ${missingAssignedUsernames.join(', ')}`,
+        description: row.description,
+        status: row.status,
+        statusLabel: PROJECT_STATUS_LABELS[row.status],
+        priority: row.priority,
+        priorityLabel: PROJECT_PRIORITY_LABELS[row.priority],
+        startDate: row.startDate,
+        dueDate: row.dueDate,
+        // Staffing is intentionally completed inside the application after import.
+        ownerId: null,
+        assignedUserIds: [],
+        projectMembers: [],
+        language: "fa",
+        direction: "rtl",
+        createdBy: toObjectId(authUserId),
+        updatedBy: toObjectId(authUserId),
       });
 
-      continue;
+      projectId = project._id as Types.ObjectId;
+
+      if (projectPhases.length) {
+        await ProjectPhase.insertMany(
+          projectPhases.map((phase) => ({
+            projectId: project._id,
+            title: phase.title,
+            description: phase.description,
+            assignedUserIds: [],
+            startDate: phase.startDate,
+            endDate: phase.endDate,
+            order: phase.order,
+            financial: phase.financial,
+            language: "fa",
+            direction: "rtl",
+            createdBy: toObjectId(authUserId),
+            updatedBy: toObjectId(authUserId),
+          })),
+        );
+      }
+
+      created.push({
+        rowNumber: row.rowNumber,
+        id: String(project._id),
+        title: project.title,
+        phaseCount: projectPhases.length,
+        staffingRequired: true,
+      });
+      createdPhaseCount += projectPhases.length;
+      existingTitleSet.add(projectKey);
+    } catch (error) {
+      if (projectId) {
+        await Promise.all([
+          ProjectPhase.deleteMany({ projectId }),
+          Project.deleteOne({ _id: projectId }),
+        ]);
+      }
+
+      errors.push({
+        sheet: "Projects",
+        rowNumber: row.rowNumber,
+        title: row.title,
+        message:
+          error instanceof Error
+            ? `ورود پروژه ناموفق بود: ${error.message}`
+            : "ورود پروژه به دلیل خطای ناشناخته ناموفق بود.",
+      });
     }
-
-    const assignedIdStrings = Array.from(
-      new Set([
-        String(owner._id),
-        ...row.assignedUsernames.map((username) =>
-          String(userMap.get(username)._id),
-        ),
-      ]),
-    );
-
-    const assignedIds = assignedIdStrings.map(toObjectId);
-
-    const memberMetaByUsername = new Map(
-      row.memberMeta.map((member) => [member.username, member]),
-    );
-
-    const projectMembers = assignedIdStrings.map((userId) => {
-      const username =
-        userId === String(owner._id)
-          ? row.ownerUsername
-          : row.assignedUsernames.find((item) => {
-              return String(userMap.get(item)?._id) === userId;
-            });
-
-      const meta = username ? memberMetaByUsername.get(username) : undefined;
-
-      return {
-        userId: toObjectId(userId),
-        roleInProject:
-          userId === String(owner._id)
-            ? 'مسئول پروژه'
-            : meta?.roleInProject || 'عضو پروژه',
-        startedAt: meta?.startedAt || row.startDate,
-        expectedFinishedAt: meta?.expectedFinishedAt || row.dueDate,
-      };
-    });
-
-    const project = await Project.create({
-      title: row.title,
-      description: row.description,
-      status: row.status,
-      statusLabel: PROJECT_STATUS_LABELS[row.status],
-      priority: row.priority,
-      priorityLabel: PROJECT_PRIORITY_LABELS[row.priority],
-      startDate: row.startDate,
-      dueDate: row.dueDate,
-      ownerId: toObjectId(String(owner._id)),
-      assignedUserIds: assignedIds,
-      projectMembers,
-      language: 'fa',
-      direction: 'rtl',
-      createdBy: toObjectId(authUserId),
-      updatedBy: toObjectId(authUserId),
-    });
-
-    created.push({
-      rowNumber: row.rowNumber,
-      id: String(project._id),
-      title: project.title,
-    });
-
-    existingTitleSet.add(row.title);
   }
 
   res.status(created.length ? 201 : 400).json({
     success: created.length > 0,
     message: created.length
-      ? `${created.length} پروژه با موفقیت از اکسل وارد شد.`
-      : 'هیچ پروژه‌ای وارد نشد.',
+      ? `${created.length} پروژه و ${createdPhaseCount} فاز بدون تخصیص افراد از اکسل وارد شد.`
+      : "هیچ پروژه‌ای وارد نشد.",
     data: {
-      totalRows: rows.length,
+      staffingMode: "post_import",
+      totalProjectRows: extractedRows.projectRows.length,
+      totalPhaseRows: extractedRows.phaseRows.length,
       createdCount: created.length,
+      createdPhaseCount,
       skippedCount,
       failedCount: errors.length,
       created,

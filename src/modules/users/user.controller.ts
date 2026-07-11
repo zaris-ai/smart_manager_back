@@ -130,7 +130,7 @@ const normalizeProfile = (value: unknown) => {
 const toSafeUser = (user: UserDocument | null) => {
   if (!user) return null;
 
-  const raw = user.toObject() as Record<string, any>;
+  const raw = (user as any).toObject() as Record<string, any>;
 
   delete raw.passwordHash;
 
@@ -341,10 +341,19 @@ export const createUser = async (
     status,
     profile,
     managerId,
-    telegramUserId,
-    telegramChatId,
-    telegramUsername,
   } = req.body;
+
+  if (
+    'telegramUserId' in req.body ||
+    'telegramChatId' in req.body ||
+    'telegramUsername' in req.body
+  ) {
+    sendValidationError(
+      res,
+      'اتصال تلگرام فقط از طریق کد یک‌بارمصرف صفحه مدیریت ربات انجام می‌شود.',
+    );
+    return;
+  }
 
   if (!firstName || typeof firstName !== 'string') {
     sendValidationError(res, 'نام الزامی است.');
@@ -425,14 +434,9 @@ export const createUser = async (
     managerId: normalizedManagerId,
     language: 'fa',
     direction: 'rtl',
-    telegramUserId:
-      typeof telegramUserId === 'string' ? telegramUserId.trim() : '',
-    telegramChatId:
-      typeof telegramChatId === 'string' ? telegramChatId.trim() : '',
-    telegramUsername:
-      typeof telegramUsername === 'string'
-        ? telegramUsername.trim().replace(/^@/, '').toLowerCase()
-        : '',
+    telegramUserId: '',
+    telegramChatId: '',
+    telegramUsername: '',
     createdBy: toObjectId(authUserId),
     updatedBy: toObjectId(authUserId),
   });
@@ -471,6 +475,18 @@ export const updateUser = async (
 
   if (!existingUser) {
     sendNotFound(res);
+    return;
+  }
+
+  if (
+    'telegramUserId' in req.body ||
+    'telegramChatId' in req.body ||
+    'telegramUsername' in req.body
+  ) {
+    sendValidationError(
+      res,
+      'شناسه‌های تلگرام قابل ویرایش دستی نیستند. از کد اتصال یک‌بارمصرف استفاده کنید.',
+    );
     return;
   }
 
@@ -606,26 +622,6 @@ export const updateUser = async (
       update.passwordHash = await bcrypt.hash(req.body.password, 12);
     }
 
-    if ('telegramUserId' in req.body) {
-      update.telegramUserId =
-        typeof req.body.telegramUserId === 'string'
-          ? req.body.telegramUserId.trim()
-          : '';
-    }
-
-    if ('telegramChatId' in req.body) {
-      update.telegramChatId =
-        typeof req.body.telegramChatId === 'string'
-          ? req.body.telegramChatId.trim()
-          : '';
-    }
-
-    if ('telegramUsername' in req.body) {
-      update.telegramUsername =
-        typeof req.body.telegramUsername === 'string'
-          ? req.body.telegramUsername.trim().replace(/^@/, '').toLowerCase()
-          : '';
-    }
   }
 
   if ('firstName' in update || 'lastName' in update) {
