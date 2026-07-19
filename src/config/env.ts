@@ -84,4 +84,96 @@ export const env = {
     'gpt-4o-mini-transcribe',
   ),
   openaiTranscriptionLanguage: optionalEnv('OPENAI_TRANSCRIPTION_LANGUAGE', 'fa'),
+
+  repositoryAnalysisEnabled: optionalBooleanEnv(
+    'REPOSITORY_ANALYSIS_ENABLED',
+    true,
+  ),
+  gitlabBaseUrl: optionalEnv('GITLAB_BASE_URL', '').replace(/\/$/, ''),
+  gitlabAccessToken: optionalEnv('GITLAB_ACCESS_TOKEN', ''),
+  repositoryAnalysisAllowInsecureHttp: optionalBooleanEnv(
+    'REPOSITORY_ANALYSIS_ALLOW_INSECURE_HTTP',
+    false,
+  ),
+  repositoryAnalysisAllowedGitlabHosts: optionalEnv(
+    'REPOSITORY_ANALYSIS_ALLOWED_GITLAB_HOSTS',
+    '',
+  ),
+  repositoryAnalysisMaxFiles: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_MAX_FILES',
+    10_000,
+  ),
+  repositoryAnalysisMaxSelectedFiles: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_MAX_SELECTED_FILES',
+    80,
+  ),
+  repositoryAnalysisMaxFileBytes: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_MAX_FILE_BYTES',
+    256 * 1024,
+  ),
+  repositoryAnalysisMaxPromptBytes: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_MAX_PROMPT_BYTES',
+    600 * 1024,
+  ),
+  repositoryAnalysisMaxExpectationsBytes: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_MAX_EXPECTATIONS_BYTES',
+    512 * 1024,
+  ),
+  repositoryAnalysisGitlabTimeoutMs: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_GITLAB_TIMEOUT_MS',
+    30_000,
+  ),
+  repositoryAnalysisStaleAfterMs: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_STALE_AFTER_MS',
+    30 * 60 * 1000,
+  ),
+  openaiRepositoryAnalysisModel: optionalEnv(
+    'OPENAI_REPOSITORY_ANALYSIS_MODEL',
+    'gpt-4.1-mini',
+  ),
+  openaiRepositoryAnalysisTimeoutMs: optionalNumberEnv(
+    'OPENAI_REPOSITORY_ANALYSIS_TIMEOUT_MS',
+    90_000,
+  ),
+  repositoryAnalysisAiEngine: optionalEnv(
+    'REPOSITORY_ANALYSIS_AI_ENGINE',
+    'python_multi_pass',
+  ),
+  repositoryAnalysisPythonBin: optionalEnv(
+    'REPOSITORY_ANALYSIS_PYTHON_BIN',
+    'python3',
+  ),
+  repositoryAnalysisPythonPath: optionalEnv(
+    'REPOSITORY_ANALYSIS_PYTHON_PATH',
+    'python',
+  ),
+  repositoryAnalysisPythonModule: optionalEnv(
+    'REPOSITORY_ANALYSIS_PYTHON_MODULE',
+    'repository_analysis',
+  ),
+  repositoryAnalysisAiChildTimeoutMs: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_AI_CHILD_TIMEOUT_MS',
+    8 * 60 * 1000,
+  ),
+  repositoryAnalysisAiMaxBatches: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_AI_MAX_BATCHES',
+    6,
+  ),
+  repositoryAnalysisAiBatchChars: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_AI_BATCH_CHARS',
+    90_000,
+  ),
+  repositoryAnalysisAiMaxOutputBytes: optionalNumberEnv(
+    'REPOSITORY_ANALYSIS_AI_MAX_OUTPUT_BYTES',
+    8 * 1024 * 1024,
+  ),
+  repositoryAnalysisAiCriticEnabled: optionalBooleanEnv(
+    'REPOSITORY_ANALYSIS_AI_CRITIC_ENABLED',
+    true,
+  ),
+  repositoryAnalysisAiFallbackToTypescript: optionalBooleanEnv(
+    'REPOSITORY_ANALYSIS_AI_FALLBACK_TO_TYPESCRIPT',
+    true,
+  ),
+
 };

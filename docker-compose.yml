@@ -6,68 +6,63 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+
     container_name: avid_backend_api
+    init: true
+
     ports:
       - "4000:4000"
+
     env_file:
       - .env
+
     environment:
       NODE_ENV: development
       PORT: 4000
       MONGO_URI: mongodb://mongodb:27017
       MONGO_DB_NAME: avid_panel
+
+      PYTHONPATH: /app/python
+      REPOSITORY_ANALYSIS_PYTHON_BIN: python3
+      REPOSITORY_ANALYSIS_PYTHON_PATH: /app/python
+      REPOSITORY_ANALYSIS_PYTHON_MODULE: repository_analysis
+
     volumes:
       - .:/app
       - /app/node_modules
+
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
+
     restart: unless-stopped
+    stop_grace_period: 15s
 
   mongodb:
     image: mongo:7
     container_name: avid_mongodb
+
     ports:
       - "27017:27017"
+
     volumes:
       - avid_mongodb_data:/data/db
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "db.adminCommand('ping').ok"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
     restart: unless-stopped
 
 volumes:
   avid_mongodb_data:
-
-
-
-# services:
-#   api:
-#     build:
-#       context: .
-#       dockerfile: Dockerfile
-#     container_name: avid_backend_api
-#     ports:
-#       - "4000:4000"
-#     env_file:
-#       - .env
-#     environment:
-#       NODE_ENV: development
-#       PORT: 4000
-#       MONGO_URI: mongodb://mongodb:27017
-#       MONGO_DB_NAME: avid_panel
-#     volumes:
-#       - .:/app
-#       - /app/node_modules
-#     depends_on:
-#       - mongodb
-#     restart: unless-stopped
-
-#   mongodb:
-#     image: mongo:7
-#     container_name: avid_mongodb
-#     ports:
-#       - "27019:27017"
-#     volumes:
-#       - avid_mongodb_data:/data/db
-#     restart: unless-stopped
-
-# volumes:
-#   avid_mongodb_data:
-

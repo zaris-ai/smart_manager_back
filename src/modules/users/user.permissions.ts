@@ -16,6 +16,8 @@ export enum UserPermission {
   PROJECTS_UPDATE = 'projects.update',
   PROJECTS_MANAGE = 'projects.manage',
 
+  REPOSITORY_AUDITS_READ = 'repository_audits.read',
+  REPOSITORY_AUDITS_MANAGE = 'repository_audits.manage',
 
   REPORTS_READ = 'reports.read',
   REPORTS_CREATE = 'reports.create',
@@ -72,6 +74,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, UserPermission[]> = {
   [UserRole.BOARD]: [
     UserPermission.USERS_READ,
     UserPermission.PROJECTS_READ,
+    UserPermission.REPOSITORY_AUDITS_READ,
     UserPermission.REPORTS_READ,
     UserPermission.CONTRACTS_READ,
     UserPermission.EVIDENCE_READ,
@@ -92,6 +95,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, UserPermission[]> = {
     UserPermission.PROJECTS_UPDATE,
     UserPermission.PROJECTS_MANAGE,
 
+    UserPermission.REPOSITORY_AUDITS_READ,
+    UserPermission.REPOSITORY_AUDITS_MANAGE,
 
     UserPermission.REPORTS_READ,
     UserPermission.REPORTS_CREATE,

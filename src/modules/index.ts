@@ -10,6 +10,7 @@ import telegramRoutes from '@/modules/telegram/telegram.routes';
 import projectRoleRoutes from './project-roles/project-role.routes';
 import projectOverviewRoutes from './project-overview/project-overview.routes';
 import fixtureRoutes from './fixtures/fixture.routes';
+import repositoryAnalysisRoutes from './repository-analysis/repository-analysis.routes';
 
 export function registerModules(): Router {
   const router = Router();
@@ -35,6 +36,7 @@ export function registerModules(): Router {
   router.use('/telegram', telegramRoutes);
   router.use('/project-roles', projectRoleRoutes);
   router.use('/project-overview', projectOverviewRoutes);
+  router.use('/repository-analysis', repositoryAnalysisRoutes);
 
   return router;
 }
