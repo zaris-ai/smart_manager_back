@@ -13,7 +13,7 @@ const fixtureRoutesEnabled = (): boolean => {
 
 const sendDisabled = (res: Response): void => {
   res.status(403).json({
-    success: false,
+    success: true,
     message:
       'مسیرهای داده آزمایشی در محیط production غیرفعال هستند. برای فعال‌سازی آگاهانه ENABLE_FIXTURE_ROUTES=true را تنظیم کنید.',
     code: 'FIXTURE_ROUTES_DISABLED',
